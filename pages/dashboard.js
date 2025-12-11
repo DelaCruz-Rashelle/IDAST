@@ -1,0 +1,2124 @@
+import { useEffect, useState, useRef } from "react";
+import { useRouter } from "next/router";
+import Head from "next/head";
+import Link from "next/link";
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+
+export default function Home() {
+  const router = useRouter();
+  const [data, setData] = useState(null);
+  const [historyData, setHistoryData] = useState("");
+  const [manual, setManual] = useState(false);
+  const [tiltValue, setTiltValue] = useState(90);
+  const [panValue, setPanValue] = useState(90);
+  const [deviceName, setDeviceName] = useState("");
+  const [gridPrice, setGridPrice] = useState("12.00");
+  const [currentDevice, setCurrentDevice] = useState("Unknown");
+  const [sliderActive, setSliderActive] = useState({ tilt: false, pan: false });
+  const [error, setError] = useState("");
+  const [deviceIP, setDeviceIP] = useState("");
+  const [ipSaving, setIpSaving] = useState(false);
+  const [ipConfigured, setIpConfigured] = useState(false);
+  const [showIpSetup, setShowIpSetup] = useState(false);
+  const [ipEditMode, setIpEditMode] = useState(false);
+  const [ipEditValue, setIpEditValue] = useState("");
+  const ipInputFocusedRef = useRef(false);
+  const [wifiSSID, setWifiSSID] = useState("");
+  const [wifiPassword, setWifiPassword] = useState("");
+  const [wifiEditMode, setWifiEditMode] = useState(false);
+  const [wifiEditSSID, setWifiEditSSID] = useState("");
+  const [wifiEditPassword, setWifiEditPassword] = useState("");
+  const [wifiSaving, setWifiSaving] = useState(false);
+  const wifiInputFocusedRef = useRef(false);
+  const [useAPMode, setUseAPMode] = useState(false);
+  const [apIP, setApIP] = useState("192.168.4.1");
+  const [staIP, setStaIP] = useState("");
+  const [showSetupWizard, setShowSetupWizard] = useState(false);
+  const [setupStep, setSetupStep] = useState(1); // 1: WiFi, 2: Device IP, 3: Tunnel URL
+  const [setupWifiSSID, setSetupWifiSSID] = useState("");
+  const [setupWifiPassword, setSetupWifiPassword] = useState("");
+  const [setupDeviceIP, setSetupDeviceIP] = useState("192.168.4.1");
+  const [setupSaving, setSetupSaving] = useState(false);
+  const [setupComplete, setSetupComplete] = useState(false);
+  const [tunnelURL, setTunnelURL] = useState("");
+  const [customTunnelURL, setCustomTunnelURL] = useState("");
+  const [tunnelEditMode, setTunnelEditMode] = useState(false);
+  const [useProxyMode, setUseProxyMode] = useState(false);
+  const [pendingWifiSSID, setPendingWifiSSID] = useState("");
+  
+  const chartRef = useRef(null);
+  const historyChartRef = useRef(null);
+  const sensorHistory = useRef({ top: [], left: [], right: [] });
+  const gridPriceDebounceRef = useRef(null);
+
+  const REPORT_END = new Date();
+  const REPORT_START = new Date(REPORT_END.getTime() - 60 * 24 * 3600 * 1000);
+
+  // Load custom tunnel URL, proxy mode, and pending WiFi settings from localStorage on mount
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const savedTunnelURL = localStorage.getItem("customTunnelURL");
+      if (savedTunnelURL) {
+        setCustomTunnelURL(savedTunnelURL);
+      }
+      const savedProxyMode = localStorage.getItem("useProxyMode");
+      if (savedProxyMode === "true") {
+        setUseProxyMode(true);
+      }
+      const pendingSSID = localStorage.getItem("pendingWifiSSID");
+      if (pendingSSID) {
+        setPendingWifiSSID(pendingSSID);
+      }
+    }
+  }, []);
+
+  // Get the API URL (use AP mode if enabled, otherwise use proxy API or custom tunnel URL or env variable)
+  const getApiUrl = () => {
+    if (useAPMode) {
+      return `http://${apIP}`;
+    }
+    
+    // If we have ESP32 IP and want to use proxy mode (no manual tunnel needed)
+    if (useProxyMode && staIP && staIP !== "Not connected") {
+      // Use Next.js API route as proxy - ESP32 must be accessible from internet
+      // This works if ESP32 has public IP or is behind a router with port forwarding
+      return `/api/proxy?ip=${staIP}`;
+    }
+    
+    // Use custom tunnel URL from localStorage if available, otherwise fallback to env variable
+    if (customTunnelURL && customTunnelURL.length > 0) {
+      return customTunnelURL;
+    }
+    return API_BASE_URL;
+  };
+
+  // Fetch telemetry data
+  const fetchData = async () => {
+    const apiUrl = getApiUrl();
+    if (!apiUrl) {
+      setError("API URL not configured. Please either:\n1. Set NEXT_PUBLIC_API_BASE_URL in Vercel environment variables, OR\n2. Connect to ESP32 Access Point and use AP mode (192.168.4.1)");
+      return;
+    }
+    try {
+      const res = await fetch(`${apiUrl}/data`);
+      if (res.ok) {
+        const json = await res.json();
+        setData(json);
+        setError(""); // Clear error on success
+        if (json.manual !== undefined) setManual(json.manual);
+        if (json.deviceName) setCurrentDevice(json.deviceName);
+        if (json.gridPrice && typeof window !== "undefined" && document.activeElement?.id !== "gridPrice") {
+          setGridPrice(json.gridPrice.toFixed(2));
+        }
+        if (json.deviceIP !== undefined) {
+          const ip = json.deviceIP || "";
+          // Only update deviceIP if the input field is not currently focused
+          if (!ipInputFocusedRef.current) {
+            setDeviceIP(ip);
+          }
+          const isValid = ip.length > 0 && ip !== "0.0.0.0";
+          setIpConfigured(isValid);
+          setShowIpSetup(!isValid);
+        }
+        if (json.wifiSSID !== undefined && !wifiInputFocusedRef.current) {
+          setWifiSSID(json.wifiSSID || "");
+        }
+        if (json.staIP !== undefined) {
+          setStaIP(json.staIP || "");
+        }
+        if (!sliderActive.tilt && json.tiltAngle !== undefined) {
+          setTiltValue(json.tiltAngle);
+        }
+        if (!sliderActive.pan && json.panTarget !== undefined) {
+          setPanValue(json.panTarget);
+        }
+        // Update sensor history for chart
+        if (json.top !== undefined) {
+          sensorHistory.current.top.push(json.top);
+          if (sensorHistory.current.top.length > 120) sensorHistory.current.top.shift();
+        }
+        if (json.left !== undefined) {
+          sensorHistory.current.left.push(json.left);
+          if (sensorHistory.current.left.length > 120) sensorHistory.current.left.shift();
+        }
+        if (json.right !== undefined) {
+          sensorHistory.current.right.push(json.right);
+          if (sensorHistory.current.right.length > 120) sensorHistory.current.right.shift();
+        }
+        drawSensorGraph();
+      } else {
+        setError(`Backend returned ${res.status}: ${res.statusText}. Check if Cloudflare tunnel is running.`);
+      }
+    } catch (e) {
+      const errorMsg = e.message || String(e);
+      // Provide more helpful error messages
+      let userFriendlyError = `Cannot connect to backend: ${errorMsg}`;
+      
+      // Check for pending WiFi settings and try to apply them when ESP32 becomes accessible
+      if (typeof window !== "undefined") {
+        const pendingSSID = localStorage.getItem("pendingWifiSSID");
+        const pendingPassword = localStorage.getItem("pendingWifiPassword");
+        
+        if (pendingSSID && !error) {
+          // Try to apply pending settings in the background
+          setTimeout(async () => {
+            try {
+              const apiUrl = getApiUrl();
+              if (apiUrl) {
+                const params = { wifiSSID: pendingSSID };
+                if (pendingPassword) {
+                  params.wifiPassword = pendingPassword;
+                }
+                await sendControl(params);
+                if (typeof window !== "undefined") {
+                  localStorage.removeItem("pendingWifiSSID");
+                  localStorage.removeItem("pendingWifiPassword");
+                }
+                setPendingWifiSSID("");
+                setWifiSSID(pendingSSID);
+                alert("✅ Pending WiFi settings have been applied to ESP32!");
+              }
+            } catch (e) {
+              // Still can't connect, keep settings pending
+            }
+          }, 2000);
+        }
+      }
+      if (errorMsg.includes("Failed to fetch") || errorMsg.includes("NetworkError") || errorMsg.includes("ERR_FAILED")) {
+        if (!useAPMode) {
+          userFriendlyError = `Cannot connect via Cloudflare tunnel. The ESP32 may not be connected to WiFi yet.
+
+🔧 Initial Setup (First Time):
+1. Connect your computer/phone to ESP32's Access Point:
+   - SSID: "Solar_Capstone_Admin"
+   - Password: "12345678"
+2. Open browser and go to: http://192.168.4.1
+3. Configure WiFi credentials in the dashboard
+4. ESP32 will restart and connect to your router
+5. Then set up Cloudflare tunnel for remote access
+
+📡 Or use AP Mode (Direct Connection):
+Click "Switch to AP Mode" below to connect directly via Access Point (no WiFi needed)
+
+Current API URL: ${API_BASE_URL || "Not configured"}`;
+        } else {
+          userFriendlyError = `Cannot connect via Access Point. Make sure:
+1. You're connected to ESP32's WiFi: "Solar_Capstone_Admin" (password: 12345678)
+2. ESP32 is powered on and AP is active
+3. Try accessing: http://${apIP} directly in your browser`;
+        }
+      } else if (errorMsg.includes("502") || errorMsg.includes("Bad Gateway")) {
+        userFriendlyError = `ESP32 not reachable (502 Bad Gateway). The tunnel is running but can't reach the ESP32. Check:
+1. ESP32 Serial Monitor - is it connected to Wi-Fi? (Look for "STA connected. IP: 192.168.1.X")
+2. Is the tunnel pointing to the correct IP? (Should match the ESP32's STA IP)
+3. Is the ESP32 web server running? (Look for "Receiver web server started")`;
+      } else if (errorMsg.includes("CORS")) {
+        userFriendlyError = `CORS error: The ESP32 is reachable but CORS headers are missing. This usually means the request failed before reaching the ESP32.`;
+      }
+      setError(userFriendlyError);
+      console.error("Fetch error:", e);
+      console.error("API URL:", API_BASE_URL);
+    }
+  };
+
+  // Send control command
+  const sendControl = async (params) => {
+    const apiUrl = getApiUrl();
+    if (!apiUrl) {
+      throw new Error("API URL not configured");
+    }
+    const body = new URLSearchParams(params).toString();
+    const res = await fetch(`${apiUrl}/control`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body
+    });
+    if (!res.ok) throw new Error("Control command failed");
+    return res;
+  };
+
+  // Draw sensor graph
+  const drawSensorGraph = () => {
+    if (!chartRef.current) return;
+    const canvas = chartRef.current;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    const sensors = ["top", "left", "right"];
+    const colors = { top: "#ff6b6b", left: "#2fd27a", right: "#4db5ff" };
+    
+    sensors.forEach(sensor => {
+      const history = sensorHistory.current[sensor];
+      if (history.length === 0) return;
+      
+      ctx.beginPath();
+      ctx.strokeStyle = colors[sensor];
+      ctx.lineWidth = 2;
+      history.forEach((val, idx) => {
+        const x = idx * (canvas.width / 120);
+        const y = canvas.height - (val / 4095) * canvas.height;
+        if (idx === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    });
+  };
+
+  // Load history
+  const loadHistory = async () => {
+    const apiUrl = getApiUrl();
+    if (!apiUrl) return;
+    try {
+      const res = await fetch(`${apiUrl}/api/history`);
+      if (res.ok) {
+        const text = await res.text();
+        setHistoryData(text);
+        drawHistoryChart(text);
+      }
+    } catch (e) {
+      console.error("History fetch error:", e);
+    }
+  };
+
+  // Draw history chart
+  const drawHistoryChart = (csvData) => {
+    if (!historyChartRef.current || !csvData) return;
+    const canvas = historyChartRef.current;
+    const ctx = canvas.getContext("2d");
+    const w = canvas.width - 40;
+    const h = canvas.height - 40;
+    
+    ctx.fillStyle = "#0e1833";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    const lines = csvData.trim().split("\n").slice(1).filter(l => l);
+    if (lines.length === 0) return;
+    
+    const points = lines.map((l, idx) => {
+      const p = l.split(",");
+      return {
+        index: idx,
+        energyWh: parseFloat(p[1]) || 0,
+        battery: parseFloat(p[2]) || 0,
+        device: p[3] || "Unknown"
+      };
+    });
+    
+    points.forEach(p => { p.energyKWh = p.energyWh / 1000.0; });
+    const maxEnergyKWh = Math.max(...points.map(p => p.energyKWh), 0.001);
+    
+    ctx.strokeStyle = "#2fd27a";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    points.forEach((p, i) => {
+      const x = 20 + (i / (points.length - 1 || 1)) * w;
+      const y = 20 + h - (p.energyKWh / maxEnergyKWh) * h;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    
+    ctx.fillStyle = "#2fd27a";
+    points.forEach((p, i) => {
+      const x = 20 + (i / (points.length - 1 || 1)) * w;
+      const y = 20 + h - (p.energyKWh / maxEnergyKWh) * h;
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    
+    ctx.fillStyle = "#9fb3d1";
+    ctx.font = "11px monospace";
+    ctx.textAlign = "left";
+    ctx.fillText("Energy Harvested (kWh)", 20, 20);
+    ctx.textAlign = "right";
+    ctx.fillText("Time →", canvas.width - 20, canvas.height - 10);
+  };
+
+  // Handle price change
+  const handlePriceChange = () => {
+    if (gridPriceDebounceRef.current) {
+      clearTimeout(gridPriceDebounceRef.current);
+    }
+    gridPriceDebounceRef.current = setTimeout(() => {
+      const price = parseFloat(gridPrice);
+      if (isNaN(price) || price <= 0 || price >= 1000) {
+        alert("Invalid price (must be 0 to 1000)");
+        setGridPrice("12.00");
+        return;
+      }
+      sendControl({ newPrice: price });
+    }, 2500);
+  };
+
+  // Check authentication on mount
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const isAuthenticated = sessionStorage.getItem("isAuthenticated");
+      if (!isAuthenticated) {
+        router.push("/login");
+        return;
+      }
+    }
+  }, [router]);
+
+  useEffect(() => {
+    // Only start fetching if authenticated
+    if (typeof window !== "undefined" && sessionStorage.getItem("isAuthenticated")) {
+      fetchData();
+      loadHistory();
+      const dataInterval = setInterval(fetchData, 350);
+      const historyInterval = setInterval(loadHistory, 30000);
+      return () => {
+        clearInterval(dataInterval);
+        clearInterval(historyInterval);
+        if (gridPriceDebounceRef.current) clearTimeout(gridPriceDebounceRef.current);
+      };
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && chartRef.current) {
+      const canvas = chartRef.current;
+      const rect = canvas.parentElement?.getBoundingClientRect();
+      if (rect) {
+        canvas.width = rect.width || 720;
+        canvas.height = 210;
+        drawSensorGraph();
+      }
+    }
+  }, [data]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && historyChartRef.current) {
+      const canvas = historyChartRef.current;
+      const rect = canvas.parentElement?.getBoundingClientRect();
+      if (rect) {
+        canvas.width = rect.width || 800;
+        canvas.height = 300;
+        if (historyData) drawHistoryChart(historyData);
+      }
+    }
+  }, [historyData]);
+
+  const mapRange = (v, inMin, inMax, outMin, outMax) => {
+    if (inMax === inMin) return outMin;
+    return ((v - inMin) * (outMax - outMin)) / (inMax - inMin) + outMin;
+  };
+
+  const degToSlider = (v) => {
+    const minPan = data?.minPan || 50;
+    const maxPan = data?.maxPan || 130;
+    return Math.round(mapRange(v, minPan, maxPan, -100, 100));
+  };
+
+  const sliderToPan = (slider) => {
+    const minPan = data?.minPan || 50;
+    const maxPan = data?.maxPan || 130;
+    slider = Math.max(-100, Math.min(100, slider));
+    const ratio = (slider + 100) / 200;
+    return Math.round(minPan + ratio * (maxPan - minPan));
+  };
+
+  const totalEnergyKWh = historyData
+    ? historyData
+        .trim()
+        .split("\n")
+        .slice(1)
+        .reduce((acc, line) => {
+          const parts = line.split(",");
+          return acc + (parseFloat(parts[1]) || 0) / 1000.0;
+        }, 0)
+    : 0;
+
+  // Show comprehensive setup wizard if configuration is incomplete
+  // Check if we need to show setup wizard (WiFi not configured OR Device IP not configured)
+  const needsSetup = (!wifiSSID || wifiSSID.length === 0 || !ipConfigured) && !setupComplete;
+  
+  // Auto-detect if we should show setup wizard on first load
+  useEffect(() => {
+    if (typeof window !== "undefined" && !setupComplete) {
+      // If WiFi or IP not configured, show setup wizard and switch to AP mode
+      if (!wifiSSID || wifiSSID.length === 0 || !ipConfigured) {
+        setShowSetupWizard(true);
+        setUseAPMode(true); // Automatically use AP mode for setup
+      }
+    }
+  }, [wifiSSID, ipConfigured, setupComplete]);
+
+  if (showSetupWizard && needsSetup) {
+    return (
+      <>
+        <Head>
+          <title>Device Setup — Solar Tracker</title>
+          <meta name="viewport" content="width=device-width,initial-scale=1" />
+        </Head>
+        <div className="setup-page-wrap">
+          <div className="setup-overlay">
+            <div className="setup-card">
+              <div className="setup-header">
+                <div className="sun"></div>
+                <h2 className="setup-title">ESP32 Initial Setup</h2>
+                <p className="setup-subtitle">
+                  {setupStep === 1 && "Step 1: Configure WiFi credentials"}
+                  {setupStep === 2 && "Step 2: Configure Device IP address"}
+                  {setupStep === 3 && "Step 3: Setup Complete - Tunnel Information"}
+                </p>
+                <div style={{ display: "flex", gap: "8px", justifyContent: "center", marginTop: "16px" }}>
+                  <div style={{ width: "40px", height: "4px", background: setupStep >= 1 ? "#2fd27a" : "var(--grid)", borderRadius: "2px" }}></div>
+                  <div style={{ width: "40px", height: "4px", background: setupStep >= 2 ? "#2fd27a" : "var(--grid)", borderRadius: "2px" }}></div>
+                  <div style={{ width: "40px", height: "4px", background: setupStep >= 3 ? "#2fd27a" : "var(--grid)", borderRadius: "2px" }}></div>
+                </div>
+              </div>
+              
+              <div className="setup-content">
+                {/* Step 1: WiFi Configuration */}
+                {setupStep === 1 && (
+                  <>
+                    <div style={{ 
+                      padding: "16px", 
+                      background: "rgba(47, 210, 122, 0.1)", 
+                      border: "1px solid rgba(47, 210, 122, 0.3)", 
+                      borderRadius: "8px", 
+                      marginBottom: "24px" 
+                    }}>
+                      <div style={{ fontSize: "13px", color: "var(--ink)", marginBottom: "8px", fontWeight: "600" }}>
+                        📡 Important: Internet Connection Required
+                      </div>
+                      <div style={{ fontSize: "12px", color: "var(--muted)", lineHeight: "1.6" }}>
+                        For remote access, the ESP32 must connect to a WiFi network <strong>with internet</strong>.
+                        <br /><br />
+                        <strong>Options:</strong>
+                        <br />• Mobile hotspot from a phone (with data)
+                        <br />• Router with internet connection
+                        <br />• Any WiFi network with internet access
+                        <br /><br />
+                        <strong>Note:</strong> The "Solar_Capstone_Admin" network is only for initial setup. 
+                        After configuration, ESP32 will connect to the internet-enabled WiFi below.
+                      </div>
+                    </div>
+                    <div className="setup-form-group">
+                      <label htmlFor="setupWifiSSID" className="setup-label">WiFi Network Name (SSID) - Must Have Internet</label>
+                      <input
+                        type="text"
+                        id="setupWifiSSID"
+                        value={setupWifiSSID}
+                        onChange={(e) => {
+                          setSetupWifiSSID(e.target.value);
+                          if (error && error.includes("WiFi")) {
+                            setError("");
+                          }
+                        }}
+                        className="setup-input"
+                        maxLength={63}
+                        placeholder="Enter WiFi network name (with internet)"
+                      />
+                      <div className="setup-hint">
+                        This should be a WiFi network with internet access (not Solar_Capstone_Admin)
+                      </div>
+                    </div>
+                    <div className="setup-form-group">
+                      <label htmlFor="setupWifiPassword" className="setup-label">WiFi Password</label>
+                      <input
+                        type="password"
+                        id="setupWifiPassword"
+                        value={setupWifiPassword}
+                        onChange={(e) => {
+                          setSetupWifiPassword(e.target.value);
+                          if (error && error.includes("WiFi")) {
+                            setError("");
+                          }
+                        }}
+                        className="setup-input"
+                        maxLength={63}
+                        placeholder="Enter WiFi password"
+                      />
+                    </div>
+                    {error && error.includes("WiFi") && (
+                      <div className="setup-error">{error}</div>
+                    )}
+                    <button
+                      className="setup-button"
+                      onClick={async () => {
+                        if (setupWifiSSID.length === 0) {
+                          setError("WiFi SSID cannot be empty");
+                          return;
+                        }
+                        setSetupSaving(true);
+                        setError("");
+                        try {
+                          const apiUrl = getApiUrl();
+                          const params = { wifiSSID: setupWifiSSID };
+                          if (setupWifiPassword.length > 0) {
+                            params.wifiPassword = setupWifiPassword;
+                          }
+                          await sendControl(params);
+                          setWifiSSID(setupWifiSSID);
+                          setSetupStep(2);
+                          setSetupSaving(false);
+                        } catch (e) {
+                          setError("Failed to save WiFi configuration. Make sure you're connected to ESP32's Access Point.");
+                          setSetupSaving(false);
+                        }
+                      }}
+                      disabled={setupSaving || !setupWifiSSID}
+                    >
+                      {setupSaving ? "Saving..." : "Next: Configure Device IP"}
+                    </button>
+                  </>
+                )}
+
+                {/* Step 2: Device IP Configuration */}
+                {setupStep === 2 && (
+                  <>
+                    <div className="setup-form-group">
+                      <label htmlFor="setupDeviceIP" className="setup-label">ESP32 Access Point IP Address</label>
+                      <input
+                        type="text"
+                        id="setupDeviceIP"
+                        value={setupDeviceIP}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          setSetupDeviceIP(value);
+                          if (error && error.includes("Invalid IP")) {
+                            setError("");
+                          }
+                        }}
+                        onBlur={(e) => {
+                          const value = e.target.value;
+                          if (value.length > 0) {
+                            const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
+                            if (!ipRegex.test(value)) {
+                              setError("Invalid IP format. Use format: XXX.XXX.XXX.XXX (e.g., 192.168.4.1)");
+                            } else {
+                              const parts = value.split(".");
+                              let isValid = true;
+                              for (let part of parts) {
+                                const num = parseInt(part, 10);
+                                if (isNaN(num) || num < 0 || num > 255) {
+                                  isValid = false;
+                                  break;
+                                }
+                              }
+                              if (!isValid) {
+                                setError("Invalid IP address. Each number must be between 0-255");
+                              } else {
+                                setError("");
+                              }
+                            }
+                          }
+                        }}
+                        className="setup-input"
+                        maxLength={15}
+                      />
+                      <div className="setup-hint">
+                        Default: 192.168.4.1 (ESP32 Access Point IP)
+                      </div>
+                    </div>
+                    {error && error.includes("Invalid IP") && (
+                      <div className="setup-error">{error}</div>
+                    )}
+                    <div style={{ display: "flex", gap: "12px" }}>
+                      <button
+                        className="setup-button"
+                        style={{ background: "linear-gradient(180deg, #30406d, #1f2a4a)", flex: 1 }}
+                        onClick={() => setSetupStep(1)}
+                        disabled={setupSaving}
+                      >
+                        Back
+                      </button>
+                      <button
+                        className="setup-button"
+                        style={{ flex: 2 }}
+                        onClick={async () => {
+                          const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
+                          const parts = setupDeviceIP.split(".");
+                          let isValid = ipRegex.test(setupDeviceIP);
+                          if (isValid) {
+                            for (let part of parts) {
+                              const num = parseInt(part, 10);
+                              if (num < 0 || num > 255 || isNaN(num)) {
+                                isValid = false;
+                                break;
+                              }
+                            }
+                          }
+                          if (!isValid) {
+                            setError("Invalid IP address. Each number must be between 0-255");
+                            return;
+                          }
+                          setSetupSaving(true);
+                          setError("");
+                          try {
+                            await sendControl({ deviceIP: setupDeviceIP });
+                            setDeviceIP(setupDeviceIP);
+                            setIpConfigured(true);
+                            setSetupStep(3);
+                            setSetupSaving(false);
+                            // Wait a bit for ESP32 to restart and connect to WiFi
+                            setTimeout(() => {
+                              setSetupComplete(true);
+                              setShowSetupWizard(false);
+                            }, 5000);
+                          } catch (e) {
+                            setError("Failed to save IP configuration. Please check your connection.");
+                            setSetupSaving(false);
+                          }
+                        }}
+                        disabled={setupSaving || !setupDeviceIP || error.length > 0}
+                      >
+                        {setupSaving ? "Saving..." : "Complete Setup"}
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {/* Step 3: Setup Complete - Show Tunnel Info */}
+                {setupStep === 3 && (
+                  <>
+                    <div style={{ textAlign: "center", marginBottom: "24px" }}>
+                      <div style={{ fontSize: "48px", marginBottom: "16px" }}>✅</div>
+                      <h3 style={{ color: "#2fd27a", margin: "0 0 8px 0" }}>Setup Complete!</h3>
+                      <p style={{ color: "var(--muted)", fontSize: "14px" }}>
+                        ESP32 is restarting and connecting to your WiFi network...
+                      </p>
+                    </div>
+                    {staIP && staIP !== "Not connected" ? (
+                      <div style={{ padding: "16px", background: "rgba(47, 210, 122, 0.1)", border: "1px solid rgba(47, 210, 122, 0.3)", borderRadius: "8px", marginBottom: "20px" }}>
+                        <div style={{ fontSize: "12px", marginBottom: "8px", color: "var(--ink)", fontWeight: "600" }}>
+                          📡 ESP32 WiFi IP Address:
+                        </div>
+                        <div className="mono" style={{ fontSize: "18px", fontWeight: "700", color: "#2fd27a", marginBottom: "12px" }}>
+                          {staIP}
+                        </div>
+                        <div style={{ fontSize: "11px", color: "var(--muted)", lineHeight: "1.6" }}>
+                          <strong>To set up Cloudflare tunnel, run:</strong>
+                          <br />
+                          <code style={{ 
+                            background: "rgba(0,0,0,0.3)", 
+                            padding: "8px 12px", 
+                            borderRadius: "4px",
+                            fontSize: "11px",
+                            display: "block",
+                            marginTop: "8px",
+                            wordBreak: "break-all"
+                          }}>
+                            cloudflared tunnel --url http://{staIP}:80
+                          </code>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ padding: "16px", background: "rgba(245, 179, 66, 0.1)", border: "1px solid rgba(245, 179, 66, 0.3)", borderRadius: "8px", marginBottom: "20px" }}>
+                        <div style={{ fontSize: "12px", color: "var(--muted)" }}>
+                          ⏳ Waiting for ESP32 to connect to WiFi... This may take 10-30 seconds.
+                          <br />
+                          <br />
+                          Once connected, the IP address will appear here.
+                        </div>
+                      </div>
+                    )}
+                    <button
+                      className="setup-button"
+                      onClick={() => {
+                        setSetupComplete(true);
+                        setShowSetupWizard(false);
+                      }}
+                    >
+                      Go to Dashboard
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+        <style jsx global>{`
+          :root {
+            --bg: #0b1020;
+            --card: #121a33;
+            --ink: #e6f0ff;
+            --muted: #9fb3d1;
+            --accent: #2fd27a;
+            --warn: #f5b342;
+            --err: #ff6b6b;
+            --grid: #1b2547;
+          }
+          body {
+            margin: 0;
+            font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+            background: radial-gradient(1200px 600px at 20% -10%, #18306400, #18306488), var(--bg);
+            color: var(--ink);
+          }
+          .setup-page-wrap {
+            min-height: 100vh;
+            background: radial-gradient(1200px 600px at 20% -10%, #18306400, #18306488), var(--bg);
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            overflow-y: auto;
+          }
+          .setup-overlay {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 40px 20px;
+            position: relative;
+          }
+          .setup-overlay::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: 
+              radial-gradient(circle at 20% 30%, rgba(24, 48, 100, 0.3) 0%, transparent 50%),
+              radial-gradient(circle at 80% 70%, rgba(47, 210, 122, 0.1) 0%, transparent 50%),
+              var(--bg);
+            backdrop-filter: blur(20px);
+            z-index: -1;
+          }
+          .setup-card {
+            max-width: 500px;
+            width: 100%;
+            background: linear-gradient(180deg, rgba(16, 23, 52, 0.95), rgba(13, 20, 43, 0.95));
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--grid);
+            border-radius: 14px;
+            padding: 40px 32px;
+            box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(148, 163, 184, 0.1);
+            position: relative;
+            z-index: 1;
+          }
+          .setup-header {
+            text-align: center;
+            margin-bottom: 32px;
+          }
+          .setup-header .sun {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(180deg, #ffd24d, #ff9a3c);
+            border-radius: 50%;
+            box-shadow: 0 0 32px #ffb347a0;
+            margin: 0 auto 20px;
+          }
+          .setup-title {
+            font-size: 28px;
+            font-weight: 700;
+            margin: 0 0 12px 0;
+            color: #e6f0ff;
+            letter-spacing: 0.2px;
+          }
+          .setup-subtitle {
+            font-size: 14px;
+            color: #9fb3d1;
+            line-height: 1.6;
+            margin: 0;
+          }
+          .setup-content {
+            margin-top: 0;
+          }
+          .setup-form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 24px;
+          }
+          .setup-label {
+            font-size: 12px;
+            color: #9fb3d1;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            margin-bottom: 2px;
+          }
+          .setup-input {
+            background: rgba(14, 24, 51, 0.8);
+            border: 1px solid var(--grid);
+            border-radius: 8px;
+            padding: 14px 16px;
+            color: #e6f0ff;
+            font-size: 16px;
+            font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+            outline: none;
+            transition: all 0.2s;
+            width: 100%;
+            box-sizing: border-box;
+          }
+          .setup-input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(47, 210, 122, 0.15);
+            background: rgba(14, 24, 51, 0.95);
+          }
+          .setup-input::placeholder {
+            color: #6b7a99;
+          }
+          .setup-hint {
+            font-size: 12px;
+            color: #9fb3d1;
+            margin-top: 4px;
+            line-height: 1.4;
+            opacity: 0.8;
+          }
+          .setup-error {
+            background: rgba(255, 107, 107, 0.15);
+            border: 1px solid rgba(255, 107, 107, 0.4);
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 20px;
+            color: #ff6b6b;
+            font-size: 13px;
+            line-height: 1.5;
+          }
+          .setup-button {
+            width: 100%;
+            padding: 14px;
+            border-radius: 8px;
+            background: linear-gradient(180deg, #2fd27a, #11a85a);
+            border: none;
+            color: #09151a;
+            font-weight: 700;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-top: 8px;
+          }
+          .setup-button:hover:not(:disabled) {
+            opacity: 0.9;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(47, 210, 122, 0.3);
+          }
+          .setup-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+          }
+        `}</style>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Head>
+        <title>Solar Tracker — ESP32</title>
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+      </Head>
+      <div className="wrap">
+        <div className="header">
+          <div className="header-left">
+            <div className="sun"></div>
+            <div className="title">Solar Tracker Telemetry</div>
+            <span className="pill">{useAPMode ? "AP Mode" : "Tunnel"}</span>
+            <span className="pill">{data ? "Online" : "Offline"}</span>
+          </div>
+          <div className="header-right">
+            <button
+              className="logout-btn"
+              onClick={() => {
+                if (typeof window !== "undefined") {
+                  sessionStorage.removeItem("isAuthenticated");
+                  sessionStorage.removeItem("email");
+                  router.push("/login");
+                }
+              }}
+              title="Logout"
+            >
+              Logout
+            </button>
+          </div>
+        </div>
+        {error && (
+          <div style={{
+            background: "rgba(255, 107, 107, 0.1)",
+            border: "1px solid #ff6b6b",
+            borderRadius: "8px",
+            padding: "12px",
+            marginBottom: "16px",
+            color: "#ff6b6b",
+            fontSize: "13px",
+            lineHeight: "1.6",
+            whiteSpace: "pre-line"
+          }}>
+            <strong>Connection Error:</strong> {error}
+            {!useAPMode && !API_BASE_URL && (
+              <div style={{ marginTop: "12px" }}>
+                <button
+                  className="manual-btn"
+                  onClick={() => {
+                    setUseAPMode(true);
+                    setError("");
+                  }}
+                  style={{ marginTop: "8px" }}
+                >
+                  Switch to AP Mode (Connect via Access Point)
+                </button>
+                <div style={{ marginTop: "8px", fontSize: "12px" }}>
+                  Or configure: Go to Vercel → Project Settings → Environment Variables → Add: <code>NEXT_PUBLIC_API_BASE_URL</code> = your Cloudflare tunnel URL
+                </div>
+              </div>
+            )}
+            {useAPMode && (
+              <div style={{ marginTop: "12px" }}>
+                <button
+                  className="manual-btn alt"
+                  onClick={() => {
+                    setUseAPMode(false);
+                    setError("");
+                  }}
+                  style={{ marginTop: "8px" }}
+                >
+                  Switch to Tunnel Mode
+                </button>
+                <div style={{ marginTop: "8px", fontSize: "12px", color: "var(--muted)" }}>
+                  Make sure you're connected to ESP32's WiFi: <strong>Solar_Capstone_Admin</strong> (password: 12345678)
+                </div>
+              </div>
+            )}
+            {!useAPMode && API_BASE_URL && (
+              <div style={{ marginTop: "12px", padding: "12px", background: "rgba(47, 210, 122, 0.1)", border: "1px solid rgba(47, 210, 122, 0.3)", borderRadius: "8px" }}>
+                <div style={{ fontSize: "12px", marginBottom: "10px", color: "var(--ink)" }}>
+                  <strong>💡 Quick Fix:</strong> If ESP32 is not connected to WiFi yet, use AP Mode to configure it first.
+                </div>
+                <button
+                  className="manual-btn"
+                  onClick={() => {
+                    setUseAPMode(true);
+                    setError("");
+                  }}
+                  style={{ fontSize: "13px", padding: "10px 16px", width: "100%" }}
+                >
+                  🔌 Switch to AP Mode (Connect via Access Point)
+                </button>
+                <div style={{ marginTop: "10px", padding: "8px", background: "rgba(0,0,0,0.2)", borderRadius: "4px", fontSize: "11px", fontFamily: "monospace" }}>
+                  <strong>Current API URL:</strong> {API_BASE_URL}
+                  <br />
+                  <strong>Note:</strong> If you restarted the Cloudflare tunnel, the URL may have changed. Update it in Vercel environment variables and redeploy.
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="status-grid">
+          <div className="status-card">
+            <div className="label">Site Summary</div>
+            <div className="value">
+              {REPORT_START.toLocaleDateString("en-PH", { month: "short", day: "numeric" })} –{" "}
+              {REPORT_END.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" })}
+            </div>
+            <div className="sub">Continuous tracking and charging sessions</div>
+            <div className="trend">Live telemetry every 0.35s</div>
+          </div>
+          <div className="status-card">
+            <div className="label">Energy Harvested</div>
+            <div className="value">
+              <span className="peso">{totalEnergyKWh.toFixed(3)} kWh</span>
+            </div>
+            <div className="sub">Cumulative energy delivered to connected devices</div>
+            <div className="trend">Goal: 0.150 kWh by end of month</div>
+          </div>
+        </div>
+
+        <div className="grid">
+          <div className="card">
+            <h3>Realtime Tracker Telemetry</h3>
+            <div className="content">
+              <div className="kpis">
+                <div className="kpi">
+                  <div className="label">Panel Power</div>
+                  <div className="value">
+                    {data?.powerW !== undefined ? data.powerW.toFixed(2) : "--"} W
+                  </div>
+                </div>
+                <div className="kpi">
+                  <div className="label">Energy</div>
+                  <div className="value">
+                    {data?.energyKWh !== undefined ? data.energyKWh.toFixed(3) : "--"} kWh
+                  </div>
+                </div>
+                <div className="kpi">
+                  <div className="label">Phones Charged</div>
+                  <div className="value">
+                    {data?.phones !== undefined ? data.phones.toFixed(2) : "--"}
+                  </div>
+                </div>
+                <div className="kpi">
+                  <div className="label">Phone Use</div>
+                  <div className="value">
+                    {data?.phoneMinutes !== undefined ? Math.round(data.phoneMinutes) : "--"} min
+                  </div>
+                </div>
+                <div className="kpi">
+                  <div className="label">₱ Saved</div>
+                  <div className="value">
+                    ₱{data?.pesos !== undefined ? data.pesos.toFixed(2) : "--"}
+                  </div>
+                </div>
+                <div className="kpi">
+                  <div className="label">Battery</div>
+                  <div className="value">
+                    {data?.batteryPct !== undefined ? Math.round(data.batteryPct) : "--"}%
+                  </div>
+                </div>
+              </div>
+              <div className="kpis" style={{ marginTop: "10px" }}>
+                <div className="kpi">
+                  <div className="label">Battery V</div>
+                  <div className="value">
+                    {data?.batteryV !== undefined ? data.batteryV.toFixed(2) : "--"} V
+                  </div>
+                </div>
+                <div className="kpi">
+                  <div className="label">Efficiency</div>
+                  <div className="value">
+                    {data?.efficiency !== undefined ? data.efficiency.toFixed(1) : "--"}%
+                  </div>
+                </div>
+                <div className="kpi">
+                  <div className="label">Panel Temp</div>
+                  <div className="value">
+                    {data?.tempC !== undefined ? data.tempC.toFixed(1) : "--"} °C
+                  </div>
+                </div>
+                <div className="kpi">
+                  <div className="label">State</div>
+                  <div className="value">
+                    {data?.steady ? "Locked" : data ? "Tracking" : "--"}
+                  </div>
+                </div>
+              </div>
+              <div style={{ marginTop: "10px", display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                <span className="mono">
+                  Tilt: {data?.tiltAngle !== undefined ? data.tiltAngle : "--"}°
+                </span>
+                <span className="mono">
+                  Pan Cmd: {data?.panCmd !== undefined ? data.panCmd : "--"}
+                </span>
+                <span className="mono">
+                  H.Err: {data?.horizontalError !== undefined ? data.horizontalError : "--"}
+                </span>
+                <span className="mono">
+                  V.Err: {data?.verticalError !== undefined ? data.verticalError : "--"}
+                </span>
+              </div>
+              <div className="chart">
+                <canvas ref={chartRef} width={720} height={210}></canvas>
+              </div>
+              <div className="legend">
+                <span>
+                  <span className="dot top"></span>Top
+                </span>
+                <span>
+                  <span className="dot left"></span>Left
+                </span>
+                <span>
+                  <span className="dot right"></span>Right
+                </span>
+              </div>
+              <div className="manual-header">
+                <span className="pill">{manual ? "Manual Control" : "Auto Tracking"}</span>
+                <button
+                  className={`manual-btn ${manual ? "alt" : ""}`}
+                  onClick={() => {
+                    const next = !manual;
+                    setManual(next);
+                    sendControl({ mode: next ? "manual" : "auto" });
+                  }}
+                >
+                  {manual ? "Switch to Auto" : "Switch to Manual"}
+                </button>
+              </div>
+              <div className="controls">
+                <div className="slider-group">
+                  <label htmlFor="tiltSlider">Tilt Angle</label>
+                  <input
+                    type="range"
+                    id="tiltSlider"
+                    min={data?.minTilt || 50}
+                    max={data?.maxTilt || 110}
+                    value={tiltValue}
+                    step="1"
+                    disabled={!manual}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value);
+                      setTiltValue(val);
+                      if (manual) sendControl({ tilt: val });
+                    }}
+                    onMouseDown={() => setSliderActive({ ...sliderActive, tilt: true })}
+                    onMouseUp={() => setSliderActive({ ...sliderActive, tilt: false })}
+                  />
+                  <div className="slider-footer">
+                    <span>
+                      Value: <span className="mono">{tiltValue}°</span>
+                    </span>
+                    <span>
+                      {data?.minTilt || 50}°-{data?.maxTilt || 110}°
+                    </span>
+                  </div>
+                </div>
+                <div className="slider-group">
+                  <label htmlFor="panSlider">Pan Angle</label>
+                  <input
+                    type="range"
+                    id="panSlider"
+                    min={data?.minPan || 50}
+                    max={data?.maxPan || 130}
+                    value={panValue}
+                    step="1"
+                    disabled={!manual}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value);
+                      setPanValue(val);
+                      if (manual) {
+                        const slider = degToSlider(val);
+                        sendControl({ pan: slider });
+                      }
+                    }}
+                    onMouseDown={() => setSliderActive({ ...sliderActive, pan: true })}
+                    onMouseUp={() => setSliderActive({ ...sliderActive, pan: false })}
+                  />
+                  <div className="slider-footer">
+                    <span>
+                      Value: <span className="mono">{panValue}°</span>
+                    </span>
+                    <span>
+                      {data?.minPan || 50}°-{data?.maxPan || 130}°
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="card" style={{ gridColumn: "1/-1", border: "2px solid rgba(47, 210, 122, 0.3)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderBottom: "1px solid var(--grid)", background: "rgba(47, 210, 122, 0.05)" }}>
+              <div>
+                <h3 style={{ margin: 0, color: "#2fd27a", fontSize: "15px" }}>🔌 WiFi Configuration</h3>
+                <div style={{ fontSize: "11px", color: "var(--muted)", marginTop: "4px" }}>
+                  Update WiFi when officials get a new network - Works even when ESP32 is offline
+                </div>
+              </div>
+              {!wifiEditMode && (
+                <button
+                  className="manual-btn"
+                  style={{ fontSize: "12px", padding: "8px 16px", background: "linear-gradient(180deg, #2fd27a, #11a85a)" }}
+                  onClick={() => {
+                    setWifiEditSSID(wifiSSID);
+                    setWifiEditPassword("");
+                    setWifiEditMode(true);
+                    setError("");
+                  }}
+                >
+                  Edit
+                </button>
+              )}
+            </div>
+            <div className="content">
+              <div className="form-group">
+                <label htmlFor="wifiSSID">WiFi Network Name (SSID)</label>
+                {wifiEditMode ? (
+                  <>
+                    <input
+                      type="text"
+                      id="wifiSSID"
+                      value={wifiEditSSID}
+                      onFocus={() => { wifiInputFocusedRef.current = true; }}
+                      onBlur={() => { wifiInputFocusedRef.current = false; }}
+                      onChange={(e) => {
+                        setWifiEditSSID(e.target.value);
+                        if (error && error.includes("WiFi")) {
+                          setError("");
+                        }
+                      }}
+                      maxLength={63}
+                      placeholder="Enter WiFi network name"
+                    />
+                    <div className="form-group" style={{ marginTop: "12px" }}>
+                      <label htmlFor="wifiPassword">WiFi Password</label>
+                      <input
+                        type="password"
+                        id="wifiPassword"
+                        value={wifiEditPassword}
+                        onFocus={() => { wifiInputFocusedRef.current = true; }}
+                        onBlur={() => { wifiInputFocusedRef.current = false; }}
+                        onChange={(e) => {
+                          setWifiEditPassword(e.target.value);
+                          if (error && error.includes("WiFi")) {
+                            setError("");
+                          }
+                        }}
+                        maxLength={63}
+                        placeholder="Enter WiFi password (leave blank to keep current)"
+                      />
+                    </div>
+                    <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
+                      <button
+                        className="manual-btn"
+                        style={{ flex: 1 }}
+                        onClick={async () => {
+                          if (wifiEditSSID.length === 0) {
+                            setError("WiFi SSID cannot be empty");
+                            return;
+                          }
+                          if (wifiEditSSID.length > 63) {
+                            setError("WiFi SSID must be 63 characters or less");
+                            return;
+                          }
+                          setWifiSaving(true);
+                          setError("");
+                          try {
+                            const params = { wifiSSID: wifiEditSSID };
+                            if (wifiEditPassword.length > 0) {
+                              params.wifiPassword = wifiEditPassword;
+                            }
+                            await sendControl(params);
+                            setWifiSSID(wifiEditSSID);
+                            setWifiEditMode(false);
+                            setWifiEditPassword("");
+                            setTimeout(() => setWifiSaving(false), 1000);
+                            alert("✅ WiFi settings saved successfully!\n\nESP32 will restart and connect to the new WiFi network.\n\n💡 If ESP32 is currently offline, connect to 'Solar_Capstone_Admin' WiFi to access it directly for configuration.");
+                          } catch (e) {
+                            // If save fails, offer to save locally for later
+                            const saveLocally = confirm("Failed to connect to ESP32. Would you like to save these WiFi settings locally? They will be applied when ESP32 is accessible.\n\n(You can also connect to 'Solar_Capstone_Admin' WiFi and configure directly)");
+                            if (saveLocally) {
+                              if (typeof window !== "undefined") {
+                                localStorage.setItem("pendingWifiSSID", wifiEditSSID);
+                                if (wifiEditPassword.length > 0) {
+                                  localStorage.setItem("pendingWifiPassword", wifiEditPassword);
+                                }
+                              }
+                              setPendingWifiSSID(wifiEditSSID);
+                              setWifiSSID(wifiEditSSID);
+                              setWifiEditMode(false);
+                              setWifiEditPassword("");
+                              alert("WiFi settings saved locally. They will be applied when ESP32 is accessible.");
+                            }
+                            setWifiSaving(false);
+                          }
+                        }}
+                        disabled={wifiSaving || !wifiEditSSID}
+                      >
+                        {wifiSaving ? "Saving..." : "Save"}
+                      </button>
+                      <button
+                        className="manual-btn alt"
+                        style={{ flex: 1 }}
+                        onClick={() => {
+                          setWifiEditMode(false);
+                          setWifiEditSSID(wifiSSID);
+                          setWifiEditPassword("");
+                          setError("");
+                        }}
+                        disabled={wifiSaving}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="mono" style={{ 
+                      background: "#0e1833", 
+                      border: "1px solid var(--grid)", 
+                      borderRadius: "8px", 
+                      padding: "12px 16px",
+                      fontFamily: "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace",
+                      fontSize: "14px",
+                      color: wifiSSID ? "var(--ink)" : "var(--muted)"
+                    }}>
+                      {wifiSSID || "Not configured"}
+                    </div>
+                    <div className="muted" style={{ marginTop: "6px", fontSize: "11px", lineHeight: "1.4" }}>
+                      <strong>Current WiFi:</strong> ESP32 will connect to this network when it has internet access.
+                      <br />
+                      <strong>To update:</strong> Click "Update WiFi" above, enter new WiFi credentials, and save.
+                      <br />
+                      <br />
+                      <strong>📱 Accessing from Vercel Website:</strong>
+                      <br />• If ESP32 is online: Settings save immediately
+                      <br />• If ESP32 is offline: Settings are saved locally and applied when ESP32 is accessible
+                      <br />
+                      <br />
+                      <strong>💡 Direct Access (When ESP32 is Offline):</strong>
+                      <br />Connect to "Solar_Capstone_Admin" WiFi → Open http://192.168.4.1 → Configure WiFi
+                    </div>
+                    {pendingWifiSSID && (
+                      <div style={{ marginTop: "12px", padding: "10px", background: "rgba(245, 179, 66, 0.1)", border: "1px solid rgba(245, 179, 66, 0.3)", borderRadius: "8px" }}>
+                        <div style={{ fontSize: "11px", color: "var(--ink)" }}>
+                          <strong>⏳ Pending WiFi Settings:</strong> {pendingWifiSSID}
+                          <br />
+                          <span style={{ fontSize: "10px", color: "var(--muted)" }}>
+                            These will be applied automatically when ESP32 is accessible
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                    {staIP && staIP !== "Not connected" && (
+                      <div style={{ marginTop: "12px", padding: "10px", background: "rgba(47, 210, 122, 0.1)", border: "1px solid rgba(47, 210, 122, 0.3)", borderRadius: "8px" }}>
+                        <div style={{ fontSize: "12px", marginBottom: "8px", color: "var(--ink)" }}>
+                          <strong>📡 ESP32 WiFi IP Address:</strong>
+                        </div>
+                        <div className="mono" style={{ 
+                          fontSize: "16px", 
+                          fontWeight: "700", 
+                          color: "#2fd27a",
+                          marginBottom: "8px"
+                        }}>
+                          {staIP}
+                        </div>
+                        <div style={{ fontSize: "11px", color: "var(--muted)", lineHeight: "1.4" }}>
+                          Use this IP to set up Cloudflare tunnel:
+                          <br />
+                          <code style={{ 
+                            background: "rgba(0,0,0,0.3)", 
+                            padding: "4px 8px", 
+                            borderRadius: "4px",
+                            fontSize: "10px",
+                            display: "inline-block",
+                            marginTop: "4px"
+                          }}>
+                            cloudflared tunnel --url http://{staIP}:80
+                          </code>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="card">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderBottom: "1px solid var(--grid)" }}>
+              <h3 style={{ margin: 0 }}>Connection Mode</h3>
+              {!tunnelEditMode && (
+                <button
+                  className="manual-btn alt"
+                  style={{ fontSize: "11px", padding: "6px 12px" }}
+                  onClick={() => {
+                    setTunnelEditMode(true);
+                    setError("");
+                  }}
+                >
+                  Edit
+                </button>
+              )}
+            </div>
+            <div className="content">
+              <div className="form-group">
+                <label htmlFor="tunnelURL">Tunnel URL (from cloudflared)</label>
+                {tunnelEditMode ? (
+                  <>
+                    <input
+                      type="text"
+                      id="tunnelURL"
+                      value={customTunnelURL}
+                      onChange={(e) => {
+                        setCustomTunnelURL(e.target.value);
+                        if (error && error.includes("Tunnel")) {
+                          setError("");
+                        }
+                      }}
+                      placeholder="https://your-tunnel-url.trycloudflare.com"
+                      style={{ fontFamily: "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" }}
+                    />
+                    <div className="muted" style={{ marginTop: "6px", fontSize: "11px", lineHeight: "1.4" }}>
+                      Enter the URL from: <code>cloudflared tunnel --url http://[ESP32_IP]:80</code>
+                    </div>
+                    <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
+                      <button
+                        className="manual-btn"
+                        style={{ flex: 1 }}
+                        onClick={() => {
+                          if (customTunnelURL.length > 0) {
+                            // Validate URL format
+                            try {
+                              new URL(customTunnelURL);
+                              localStorage.setItem("customTunnelURL", customTunnelURL);
+                              setTunnelEditMode(false);
+                              setError("");
+                              alert("Tunnel URL saved! The dashboard will now use this URL.");
+                            } catch (e) {
+                              setError("Invalid URL format. Please enter a valid URL (e.g., https://example.trycloudflare.com)");
+                            }
+                          } else {
+                            // Clear the custom URL
+                            localStorage.removeItem("customTunnelURL");
+                            setCustomTunnelURL("");
+                            setTunnelEditMode(false);
+                            setError("");
+                            alert("Tunnel URL cleared. Using default from environment variable.");
+                          }
+                        }}
+                      >
+                        Save
+                      </button>
+                      <button
+                        className="manual-btn alt"
+                        style={{ flex: 1 }}
+                        onClick={() => {
+                          setTunnelEditMode(false);
+                          setError("");
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="mono" style={{ 
+                      background: "#0e1833", 
+                      border: "1px solid var(--grid)", 
+                      borderRadius: "8px", 
+                      padding: "12px 16px",
+                      fontFamily: "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace",
+                      fontSize: "14px",
+                      color: customTunnelURL ? "var(--ink)" : "var(--muted)",
+                      wordBreak: "break-all"
+                    }}>
+                      {customTunnelURL || API_BASE_URL || "Not configured"}
+                    </div>
+                    <div className="muted" style={{ marginTop: "6px", fontSize: "11px", lineHeight: "1.4" }}>
+                      {customTunnelURL ? "Custom tunnel URL (saved in browser)" : API_BASE_URL ? "Using environment variable" : "Configure tunnel URL to connect to ESP32 remotely"}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="card">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderBottom: "1px solid var(--grid)" }}>
+              <h3 style={{ margin: 0 }}>Device IP Configuration</h3>
+              {!ipEditMode && (
+                <button
+                  className="manual-btn alt"
+                  style={{ fontSize: "11px", padding: "6px 12px" }}
+                  onClick={() => {
+                    setIpEditValue(deviceIP);
+                    setIpEditMode(true);
+                    setError("");
+                  }}
+                >
+                  Edit
+                </button>
+              )}
+            </div>
+            <div className="content">
+              <div className="form-group">
+                <label htmlFor="deviceIP">ESP32 Access Point IP Address</label>
+                {ipEditMode ? (
+                  <>
+                    <input
+                      type="text"
+                      id="deviceIP"
+                      value={ipEditValue}
+                      onFocus={() => { ipInputFocusedRef.current = true; }}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setIpEditValue(value);
+                        if (error && error.includes("Invalid IP")) {
+                          setError("");
+                        }
+                      }}
+                      onBlur={(e) => {
+                        ipInputFocusedRef.current = false;
+                        const value = e.target.value;
+                        if (value.length > 0) {
+                          const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
+                          if (!ipRegex.test(value)) {
+                            setError("Invalid IP format. Use format: XXX.XXX.XXX.XXX (e.g., 192.168.4.1)");
+                          } else {
+                            const parts = value.split(".");
+                            let isValid = true;
+                            for (let part of parts) {
+                              const num = parseInt(part, 10);
+                              if (isNaN(num) || num < 0 || num > 255) {
+                                isValid = false;
+                                break;
+                              }
+                            }
+                            if (!isValid) {
+                              setError("Invalid IP address. Each number must be between 0-255 (e.g., 192.168.4.1)");
+                            } else {
+                              setError("");
+                            }
+                          }
+                        }
+                      }}
+                      maxLength={15}
+                      className="mono"
+                      style={{ fontFamily: "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" }}
+                    />
+                    <div className="muted" style={{ marginTop: "6px", fontSize: "11px", lineHeight: "1.4" }}>
+                      Format: XXX.XXX.XXX.XXX (e.g., 192.168.4.1)
+                    </div>
+                    <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
+                      <button
+                        className="manual-btn"
+                        style={{ flex: 1 }}
+                        onClick={async () => {
+                          const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
+                          const parts = ipEditValue.split(".");
+                          let isValid = ipRegex.test(ipEditValue);
+                          if (isValid) {
+                            for (let part of parts) {
+                              const num = parseInt(part, 10);
+                              if (num < 0 || num > 255 || isNaN(num)) {
+                                isValid = false;
+                                break;
+                              }
+                            }
+                          }
+                          
+                          if (!isValid || ipEditValue.length === 0) {
+                            setError("Invalid IP address. Each number must be between 0-255 (e.g., 192.168.4.1)");
+                            return;
+                          }
+                          setIpSaving(true);
+                          setError("");
+                          try {
+                            await sendControl({ deviceIP: ipEditValue });
+                            setDeviceIP(ipEditValue);
+                            setIpEditMode(false);
+                            setTimeout(() => setIpSaving(false), 1000);
+                          } catch (e) {
+                            setError("Failed to save IP configuration. Please check your connection.");
+                            setIpSaving(false);
+                          }
+                        }}
+                        disabled={ipSaving || !ipEditValue}
+                      >
+                        {ipSaving ? "Saving..." : "Save"}
+                      </button>
+                      <button
+                        className="manual-btn alt"
+                        style={{ flex: 1 }}
+                        onClick={() => {
+                          setIpEditMode(false);
+                          setIpEditValue(deviceIP);
+                          setError("");
+                        }}
+                        disabled={ipSaving}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="mono" style={{ 
+                      background: "#0e1833", 
+                      border: "1px solid var(--grid)", 
+                      borderRadius: "8px", 
+                      padding: "12px 16px",
+                      fontFamily: "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace",
+                      fontSize: "14px",
+                      color: deviceIP ? "var(--ink)" : "var(--muted)"
+                    }}>
+                      {deviceIP || "Not configured"}
+                    </div>
+                    <div className="muted" style={{ marginTop: "6px", fontSize: "11px", lineHeight: "1.4" }}>
+                      This is the IP address of the ESP32's Access Point mode. Click Edit to change it.
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="card">
+            <h3>Actual Sensors & Servo</h3>
+            <div className="content">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Channel</th>
+                    <th>Value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Top</td>
+                    <td className="mono">{data?.top !== undefined ? data.top : "--"}</td>
+                  </tr>
+                  <tr>
+                    <td>Left</td>
+                    <td className="mono">{data?.left !== undefined ? data.left : "--"}</td>
+                  </tr>
+                  <tr>
+                    <td>Right</td>
+                    <td className="mono">{data?.right !== undefined ? data.right : "--"}</td>
+                  </tr>
+                  <tr>
+                    <td>Average</td>
+                    <td className="mono">{data?.avg !== undefined ? data.avg : "--"}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div className="muted" style={{ marginTop: "8px" }}>
+                Actual Power Estimate: <span className="mono">{data?.powerActualW !== undefined ? data.powerActualW.toFixed(2) : "--"}</span> W
+              </div>
+              <div className="muted">
+                Model Tilt: <span className="mono">{data?.simTilt !== undefined ? data.simTilt : "--"}</span>° | Model H.Err:{" "}
+                <span className="mono">{data?.simHErr !== undefined ? data.simHErr : "--"}</span> | Model V.Err:{" "}
+                <span className="mono">{data?.simVErr !== undefined ? data.simVErr : "--"}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="card" style={{ gridColumn: "1/-1" }}>
+            <h3>Monthly Report — Energy History</h3>
+            <div className="content">
+              <div className="history-chart">
+                <canvas ref={historyChartRef} width={800} height={300}></canvas>
+              </div>
+              <div className="history-meta">
+                <h4>Device highlights (rolling 60 days)</h4>
+                <ul id="historyHighlights">
+                  {historyData
+                    ? (() => {
+                        const lines = historyData.trim().split("\n").slice(1);
+                        const galaxyKWh = (
+                          lines
+                            .filter((l) => l.includes("Galaxy"))
+                            .reduce((acc, l) => acc + (parseFloat(l.split(",")[1]) || 0) / 1000.0, 0)
+                        ).toFixed(3);
+                        const iphoneKWh = (
+                          lines
+                            .filter((l) => l.includes("iPhone"))
+                            .reduce((acc, l) => acc + (parseFloat(l.split(",")[1]) || 0) / 1000.0, 0)
+                        ).toFixed(3);
+                        const tabletKWh = (
+                          lines
+                            .filter((l) => l.toLowerCase().includes("tablet"))
+                            .reduce((acc, l) => acc + (parseFloat(l.split(",")[1]) || 0) / 1000.0, 0)
+                        ).toFixed(3);
+                        return (
+                          <>
+                            <li>{galaxyKWh} kWh delivered to Galaxy S24 users.</li>
+                            <li>{iphoneKWh} kWh routed to iPhone 15 owners.</li>
+                            <li>{tabletKWh} kWh sustaining our community tablets.</li>
+                          </>
+                        );
+                      })()
+                    : null}
+                </ul>
+                <table className="table" id="historySummary" style={{ marginTop: "8px" }}>
+                  <thead>
+                    <tr>
+                      <th>Metric</th>
+                      <th>Value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>Total Energy</td>
+                      <td>{totalEnergyKWh.toFixed(3)} kWh</td>
+                    </tr>
+                    <tr>
+                      <td>Average per Day</td>
+                      <td>
+                        {historyData
+                          ? (totalEnergyKWh / Math.max(historyData.trim().split("\n").slice(1).length, 1)).toFixed(3)
+                          : "0.000"}{" "}
+                        kWh
+                      </td>
+                    </tr>
+                    <tr>
+                      <td>Estimated Savings</td>
+                      <td>₱{(totalEnergyKWh * parseFloat(gridPrice || 12)).toFixed(2)}</td>
+                    </tr>
+                    <tr>
+                      <td>Most Active Device</td>
+                      <td>—</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <button
+                className="manual-btn alt"
+                style={{ marginTop: "12px", width: "100%" }}
+                onClick={loadHistory}
+              >
+                Refresh History
+              </button>
+            </div>
+          </div>
+        </div>
+        <footer>Charge phones with sunshine — savings and impact shown are based on actual tracker readings and energy estimates.</footer>
+      </div>
+      <style jsx global>{`
+        :root {
+          --bg: #0b1020;
+          --card: #121a33;
+          --ink: #e6f0ff;
+          --muted: #9fb3d1;
+          --accent: #2fd27a;
+          --warn: #f5b342;
+          --err: #ff6b6b;
+          --grid: #1b2547;
+        }
+        * {
+          box-sizing: border-box;
+        }
+        body {
+          margin: 0;
+          font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+          background: radial-gradient(1200px 600px at 20% -10%, #18306400, #18306488), var(--bg);
+          color: var(--ink);
+        }
+        .wrap {
+          max-width: 1100px;
+          margin: 32px auto;
+          padding: 0 16px;
+        }
+        .header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          margin-bottom: 18px;
+          flex-wrap: wrap;
+        }
+        .header-left {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          flex-wrap: wrap;
+        }
+        .header-right {
+          display: flex;
+          align-items: center;
+          gap: 16px;
+          margin-left: auto;
+        }
+        .header-nav-link {
+          color: var(--muted);
+          text-decoration: none;
+          font-size: 13px;
+          font-weight: 500;
+          transition: color 0.2s;
+          padding: 6px 0;
+        }
+        .header-nav-link:hover {
+          color: var(--accent);
+        }
+        .logout-btn {
+          padding: 6px 12px;
+          border-radius: 8px;
+          background: linear-gradient(180deg, #30406d, #1f2a4a);
+          border: 1px solid var(--grid);
+          color: var(--muted);
+          font-size: 11px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+        .logout-btn:hover {
+          background: linear-gradient(180deg, #3d4f7a, #2a3658);
+          color: var(--ink);
+          border-color: var(--accent);
+        }
+        @media (max-width: 768px) {
+          .header {
+            flex-direction: column;
+            align-items: flex-start;
+          }
+          .header-right {
+            margin-left: 0;
+            width: 100%;
+            justify-content: flex-end;
+          }
+        }
+        .sun {
+          width: 14px;
+          height: 14px;
+          background: linear-gradient(180deg, #ffd24d, #ff9a3c);
+          border-radius: 50%;
+          box-shadow: 0 0 24px #ffb347a0;
+        }
+        .title {
+          font-weight: 700;
+          letter-spacing: 0.2px;
+        }
+        .grid {
+          display: grid;
+          grid-template-columns: 1.2fr 0.8fr;
+          gap: 16px;
+        }
+        .card {
+          background: linear-gradient(180deg, #101734, #0d142b);
+          border: 1px solid var(--grid);
+          border-radius: 14px;
+          overflow: hidden;
+        }
+        .card h3 {
+          margin: 0;
+          padding: 14px 16px;
+          border-bottom: 1px solid var(--grid);
+          font-size: 14px;
+          color: var(--muted);
+        }
+        .content {
+          padding: 14px 16px;
+        }
+        .kpis {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 10px;
+          margin-top: 8px;
+        }
+        .kpi {
+          background: #0e1833;
+          border: 1px solid var(--grid);
+          border-radius: 10px;
+          padding: 10px 12px;
+        }
+        .kpi .label {
+          font-size: 11px;
+          color: var(--muted);
+        }
+        .kpi .value {
+          font-size: 18px;
+          font-weight: 700;
+          margin-top: 4px;
+        }
+        .mono {
+          font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+        }
+        .pill {
+          display: inline-block;
+          padding: 2px 8px;
+          border-radius: 99px;
+          border: 1px solid var(--grid);
+          font-size: 11px;
+          color: var(--muted);
+        }
+        .badge {
+          color: #09151a;
+          background: linear-gradient(180deg, #2fd27a, #11a85a);
+          border: none;
+          padding: 2px 8px;
+          border-radius: 8px;
+          font-weight: 700;
+        }
+        .manual-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 12px;
+        }
+        .manual-btn {
+          cursor: pointer;
+          font-size: 12px;
+          padding: 6px 12px;
+          border-radius: 8px;
+          background: linear-gradient(180deg, #2fd27a, #11a85a);
+          border: none;
+          color: #09151a;
+          font-weight: 700;
+        }
+        .manual-btn.alt {
+          background: linear-gradient(180deg, #30406d, #1f2a4a);
+          color: var(--muted);
+          border: 1px solid var(--grid);
+        }
+        .controls {
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
+        }
+        .slider-group {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+        .slider-group label {
+          font-size: 12px;
+          color: var(--muted);
+          font-weight: 600;
+        }
+        .slider-footer {
+          display: flex;
+          justify-content: space-between;
+          font-size: 11px;
+          color: var(--muted);
+        }
+        input[type="range"] {
+          -webkit-appearance: none;
+          width: 100%;
+          height: 4px;
+          background: var(--grid);
+          border-radius: 4px;
+          outline: none;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          width: 16px;
+          height: 16px;
+          border-radius: 50%;
+          background: var(--accent);
+          border: none;
+          box-shadow: 0 0 8px #2fd27a66;
+        }
+        input[type="range"]:disabled {
+          opacity: 0.35;
+        }
+        input[type="text"],
+        input[type="number"] {
+          background: #0e1833;
+          border: 1px solid var(--grid);
+          border-radius: 8px;
+          padding: 8px 12px;
+          color: var(--ink);
+          font-size: 13px;
+          width: 100%;
+        }
+        input[type="text"]:focus,
+        input[type="number"]:focus {
+          outline: none;
+          border-color: var(--accent);
+        }
+        .legend {
+          display: flex;
+          gap: 12px;
+          margin-top: 10px;
+          font-size: 11px;
+          color: var(--muted);
+        }
+        .legend span {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .dot {
+          width: 10px;
+          height: 10px;
+          border-radius: 50%;
+        }
+        .dot.top {
+          background: #ff6b6b;
+        }
+        .dot.left {
+          background: #2fd27a;
+        }
+        .dot.right {
+          background: #4db5ff;
+        }
+        .chart {
+          position: relative;
+          height: 220px;
+          background: linear-gradient(0deg, #0a1124, #0d1630);
+          border: 1px solid var(--grid);
+          border-radius: 12px;
+          overflow: hidden;
+        }
+        .table {
+          width: 100%;
+          border-collapse: collapse;
+          margin-top: 6px;
+        }
+        .table th,
+        .table td {
+          border-bottom: 1px solid var(--grid);
+          padding: 8px 4px;
+          text-align: left;
+          font-size: 13px;
+        }
+        .muted {
+          color: var(--muted);
+        }
+        footer {
+          margin-top: 18px;
+          font-size: 12px;
+          color: var(--muted);
+        }
+        .history-chart {
+          height: 300px;
+          background: linear-gradient(0deg, #0a1124, #0d1630);
+          border: 1px solid var(--grid);
+          border-radius: 12px;
+          margin-top: 12px;
+          position: relative;
+        }
+        .form-group {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          margin-bottom: 12px;
+        }
+        .form-group label {
+          font-size: 12px;
+          color: var(--muted);
+          font-weight: 600;
+        }
+        .status-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+          gap: 12px;
+          margin-bottom: 16px;
+        }
+        .status-card {
+          background: linear-gradient(135deg, #142041, #0e1527);
+          border: 1px solid var(--grid);
+          border-radius: 14px;
+          padding: 14px 18px;
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          box-shadow: 0 10px 30px #06091480;
+        }
+        .status-card .label {
+          font-size: 11px;
+          letter-spacing: 0.6px;
+          color: var(--muted);
+          text-transform: uppercase;
+        }
+        .status-card .value {
+          font-size: 24px;
+          font-weight: 700;
+        }
+        .status-card .sub {
+          font-size: 12px;
+          color: var(--muted);
+        }
+        .status-card .trend {
+          font-size: 11px;
+          color: #2fd27a;
+          font-weight: 600;
+        }
+        .history-meta {
+          margin-top: 12px;
+          border: 1px solid var(--grid);
+          border-radius: 12px;
+          padding: 12px;
+          background: #0e1833;
+        }
+        .history-meta h4 {
+          margin: 0 0 6px 0;
+          font-size: 13px;
+          color: var(--muted);
+          text-transform: uppercase;
+          letter-spacing: 0.4px;
+        }
+        .history-meta ul {
+          margin: 0;
+          padding-left: 18px;
+          font-size: 12px;
+          color: var(--ink);
+        }
+        .peso {
+          font-weight: 700;
+          color: #2fd27a;
+        }
+      `}</style>
+    </>
+  );
+}
