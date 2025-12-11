@@ -35,7 +35,7 @@ export default function Home() {
   const [apIP, setApIP] = useState("192.168.4.1");
   const [staIP, setStaIP] = useState("");
   const [showSetupWizard, setShowSetupWizard] = useState(false);
-  const [setupStep, setSetupStep] = useState(1); // 1: WiFi, 2: Device IP, 3: Tunnel URL
+  const [setupStep, setSetupStep] = useState(3); // 3: Tunnel URL
   const [setupWifiSSID, setSetupWifiSSID] = useState("");
   const [setupWifiPassword, setSetupWifiPassword] = useState("");
   const [setupDeviceIP, setSetupDeviceIP] = useState("192.168.4.1");
@@ -432,20 +432,8 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
         }, 0)
     : 0;
 
-  // Show comprehensive setup wizard if configuration is incomplete
-  // Check if we need to show setup wizard (WiFi not configured OR Device IP not configured)
-  const needsSetup = (!wifiSSID || wifiSSID.length === 0 || !ipConfigured) && !setupComplete;
-  
-  // Auto-detect if we should show setup wizard on first load
-  useEffect(() => {
-    if (typeof window !== "undefined" && !setupComplete) {
-      // If WiFi or IP not configured, show setup wizard and switch to AP mode
-      if (!wifiSSID || wifiSSID.length === 0 || !ipConfigured) {
-        setShowSetupWizard(true);
-        setUseAPMode(true); // Automatically use AP mode for setup
-      }
-    }
-  }, [wifiSSID, ipConfigured, setupComplete]);
+  // Show setup wizard for tunnel information (step 3 only)
+  const needsSetup = !setupComplete;
 
   if (showSetupWizard && needsSetup) {
     return (
@@ -459,229 +447,21 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
             <div className="setup-card">
               <div className="setup-header">
                 <div className="sun"></div>
-                <h2 className="setup-title">ESP32 Initial Setup</h2>
+                <h2 className="setup-title">Tunnel Information</h2>
                 <p className="setup-subtitle">
-                  {setupStep === 1 && "Step 1: Configure WiFi credentials"}
-                  {setupStep === 2 && "Step 2: Configure Device IP address"}
-                  {setupStep === 3 && "Step 3: Setup Complete - Tunnel Information"}
+                  Cloudflare Tunnel Setup
                 </p>
-                <div style={{ display: "flex", gap: "8px", justifyContent: "center", marginTop: "16px" }}>
-                  <div style={{ width: "40px", height: "4px", background: setupStep >= 1 ? "#2fd27a" : "var(--grid)", borderRadius: "2px" }}></div>
-                  <div style={{ width: "40px", height: "4px", background: setupStep >= 2 ? "#2fd27a" : "var(--grid)", borderRadius: "2px" }}></div>
-                  <div style={{ width: "40px", height: "4px", background: setupStep >= 3 ? "#2fd27a" : "var(--grid)", borderRadius: "2px" }}></div>
-                </div>
               </div>
               
               <div className="setup-content">
-                {/* Step 1: WiFi Configuration */}
-                {setupStep === 1 && (
-                  <>
-                    <div style={{ 
-                      padding: "16px", 
-                      background: "rgba(47, 210, 122, 0.1)", 
-                      border: "1px solid rgba(47, 210, 122, 0.3)", 
-                      borderRadius: "8px", 
-                      marginBottom: "24px" 
-                    }}>
-                      <div style={{ fontSize: "13px", color: "var(--ink)", marginBottom: "8px", fontWeight: "600" }}>
-                        📡 Important: Internet Connection Required
-                      </div>
-                      <div style={{ fontSize: "12px", color: "var(--muted)", lineHeight: "1.6" }}>
-                        For remote access, the ESP32 must connect to a WiFi network <strong>with internet</strong>.
-                        <br /><br />
-                        <strong>Options:</strong>
-                        <br />• Mobile hotspot from a phone (with data)
-                        <br />• Router with internet connection
-                        <br />• Any WiFi network with internet access
-                        <br /><br />
-                        <strong>Note:</strong> The "Solar_Capstone_Admin" network is only for initial setup. 
-                        After configuration, ESP32 will connect to the internet-enabled WiFi below.
-                      </div>
-                    </div>
-                    <div className="setup-form-group">
-                      <label htmlFor="setupWifiSSID" className="setup-label">WiFi Network Name (SSID) - Must Have Internet</label>
-                      <input
-                        type="text"
-                        id="setupWifiSSID"
-                        value={setupWifiSSID}
-                        onChange={(e) => {
-                          setSetupWifiSSID(e.target.value);
-                          if (error && error.includes("WiFi")) {
-                            setError("");
-                          }
-                        }}
-                        className="setup-input"
-                        maxLength={63}
-                        placeholder="Enter WiFi network name (with internet)"
-                      />
-                      <div className="setup-hint">
-                        This should be a WiFi network with internet access (not Solar_Capstone_Admin)
-                      </div>
-                    </div>
-                    <div className="setup-form-group">
-                      <label htmlFor="setupWifiPassword" className="setup-label">WiFi Password</label>
-                      <input
-                        type="password"
-                        id="setupWifiPassword"
-                        value={setupWifiPassword}
-                        onChange={(e) => {
-                          setSetupWifiPassword(e.target.value);
-                          if (error && error.includes("WiFi")) {
-                            setError("");
-                          }
-                        }}
-                        className="setup-input"
-                        maxLength={63}
-                        placeholder="Enter WiFi password"
-                      />
-                    </div>
-                    {error && error.includes("WiFi") && (
-                      <div className="setup-error">{error}</div>
-                    )}
-                    <button
-                      className="setup-button"
-                      onClick={async () => {
-                        if (setupWifiSSID.length === 0) {
-                          setError("WiFi SSID cannot be empty");
-                          return;
-                        }
-                        setSetupSaving(true);
-                        setError("");
-                        try {
-                          const apiUrl = getApiUrl();
-                          const params = { wifiSSID: setupWifiSSID };
-                          if (setupWifiPassword.length > 0) {
-                            params.wifiPassword = setupWifiPassword;
-                          }
-                          await sendControl(params);
-                          setWifiSSID(setupWifiSSID);
-                          setSetupStep(2);
-                          setSetupSaving(false);
-                        } catch (e) {
-                          setError("Failed to save WiFi configuration. Make sure you're connected to ESP32's Access Point.");
-                          setSetupSaving(false);
-                        }
-                      }}
-                      disabled={setupSaving || !setupWifiSSID}
-                    >
-                      {setupSaving ? "Saving..." : "Next: Configure Device IP"}
-                    </button>
-                  </>
-                )}
-
-                {/* Step 2: Device IP Configuration */}
-                {setupStep === 2 && (
-                  <>
-                    <div className="setup-form-group">
-                      <label htmlFor="setupDeviceIP" className="setup-label">ESP32 Access Point IP Address</label>
-                      <input
-                        type="text"
-                        id="setupDeviceIP"
-                        value={setupDeviceIP}
-                        onChange={(e) => {
-                          const value = e.target.value;
-                          setSetupDeviceIP(value);
-                          if (error && error.includes("Invalid IP")) {
-                            setError("");
-                          }
-                        }}
-                        onBlur={(e) => {
-                          const value = e.target.value;
-                          if (value.length > 0) {
-                            const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
-                            if (!ipRegex.test(value)) {
-                              setError("Invalid IP format. Use format: XXX.XXX.XXX.XXX (e.g., 192.168.4.1)");
-                            } else {
-                              const parts = value.split(".");
-                              let isValid = true;
-                              for (let part of parts) {
-                                const num = parseInt(part, 10);
-                                if (isNaN(num) || num < 0 || num > 255) {
-                                  isValid = false;
-                                  break;
-                                }
-                              }
-                              if (!isValid) {
-                                setError("Invalid IP address. Each number must be between 0-255");
-                              } else {
-                                setError("");
-                              }
-                            }
-                          }
-                        }}
-                        className="setup-input"
-                        maxLength={15}
-                      />
-                      <div className="setup-hint">
-                        Default: 192.168.4.1 (ESP32 Access Point IP)
-                      </div>
-                    </div>
-                    {error && error.includes("Invalid IP") && (
-                      <div className="setup-error">{error}</div>
-                    )}
-                    <div style={{ display: "flex", gap: "12px" }}>
-                      <button
-                        className="setup-button"
-                        style={{ background: "linear-gradient(180deg, #30406d, #1f2a4a)", flex: 1 }}
-                        onClick={() => setSetupStep(1)}
-                        disabled={setupSaving}
-                      >
-                        Back
-                      </button>
-                      <button
-                        className="setup-button"
-                        style={{ flex: 2 }}
-                        onClick={async () => {
-                          const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
-                          const parts = setupDeviceIP.split(".");
-                          let isValid = ipRegex.test(setupDeviceIP);
-                          if (isValid) {
-                            for (let part of parts) {
-                              const num = parseInt(part, 10);
-                              if (num < 0 || num > 255 || isNaN(num)) {
-                                isValid = false;
-                                break;
-                              }
-                            }
-                          }
-                          if (!isValid) {
-                            setError("Invalid IP address. Each number must be between 0-255");
-                            return;
-                          }
-                          setSetupSaving(true);
-                          setError("");
-                          try {
-                            await sendControl({ deviceIP: setupDeviceIP });
-                            setDeviceIP(setupDeviceIP);
-                            setIpConfigured(true);
-                            setSetupStep(3);
-                            setSetupSaving(false);
-                            // Wait a bit for ESP32 to restart and connect to WiFi
-                            setTimeout(() => {
-                              setSetupComplete(true);
-                              setShowSetupWizard(false);
-                            }, 5000);
-                          } catch (e) {
-                            setError("Failed to save IP configuration. Please check your connection.");
-                            setSetupSaving(false);
-                          }
-                        }}
-                        disabled={setupSaving || !setupDeviceIP || error.length > 0}
-                      >
-                        {setupSaving ? "Saving..." : "Complete Setup"}
-                      </button>
-                    </div>
-                  </>
-                )}
-
-                {/* Step 3: Setup Complete - Show Tunnel Info */}
+                {/* Tunnel Information */}
                 {setupStep === 3 && (
                   <>
                     <div style={{ textAlign: "center", marginBottom: "24px" }}>
-                      <div style={{ fontSize: "48px", marginBottom: "16px" }}>✅</div>
-                      <h3 style={{ color: "#2fd27a", margin: "0 0 8px 0" }}>Setup Complete!</h3>
+                      <div style={{ fontSize: "48px", marginBottom: "16px" }}>📡</div>
+                      <h3 style={{ color: "#2fd27a", margin: "0 0 8px 0" }}>Tunnel Setup</h3>
                       <p style={{ color: "var(--muted)", fontSize: "14px" }}>
-                        ESP32 is restarting and connecting to your WiFi network...
+                        Configure Cloudflare tunnel for remote access
                       </p>
                     </div>
                     {staIP && staIP !== "Not connected" ? (
