@@ -122,6 +122,7 @@ export default function Home() {
         if (json.manual !== undefined) setManual(json.manual);
         if (json.deviceName && !deviceNameInputFocusedRef.current) {
           setCurrentDevice(json.deviceName);
+          setDeviceName(json.deviceName);
         }
         if (json.gridPrice && typeof window !== "undefined" && document.activeElement?.id !== "gridPrice") {
           setGridPrice(json.gridPrice.toFixed(2));
@@ -1009,27 +1010,40 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
                 <input
                   type="text"
                   id="deviceName"
-                  value={currentDevice}
+                  value={deviceName}
                   onFocus={() => { deviceNameInputFocusedRef.current = true; }}
-                  onBlur={async () => {
+                  onBlur={() => {
                     deviceNameInputFocusedRef.current = false;
-                    if (currentDevice.trim().length > 0) {
-                      try {
-                        await sendControl({ deviceName: currentDevice.trim() });
-                      } catch (e) {
-                        console.error("Failed to save device name:", e);
-                      }
-                    }
                   }}
                   onChange={(e) => {
-                    setCurrentDevice(e.target.value);
+                    setDeviceName(e.target.value);
                   }}
-                  placeholder="Enter device name"
+                  placeholder="Enter device name (e.g., iPhone 15)"
                   maxLength={23}
                 />
-                <div className="muted" style={{ marginTop: "4px", fontSize: "11px" }}>
-                  Name of the device being charged (e.g., Galaxy_S24, iPhone_15)
-                </div>
+              </div>
+              <button
+                className="manual-btn"
+                style={{ width: "100%", marginTop: "8px", marginBottom: "16px" }}
+                onClick={async () => {
+                  if (deviceName.trim().length > 0) {
+                    try {
+                      await sendControl({ deviceName: deviceName.trim() });
+                      setCurrentDevice(deviceName.trim());
+                      alert("✅ Charging session started for: " + deviceName.trim());
+                    } catch (e) {
+                      console.error("Failed to start charging session:", e);
+                      alert("❌ Failed to start charging session. Please check your connection.");
+                    }
+                  } else {
+                    alert("Please enter a device name first.");
+                  }
+                }}
+              >
+                Start Charging Session
+              </button>
+              <div style={{ marginBottom: "16px", fontSize: "13px", color: "var(--ink)" }}>
+                Current Device: <span className="mono" style={{ fontWeight: "600" }}>{currentDevice}</span>
               </div>
               <div className="form-group">
                 <label htmlFor="gridPrice">Batelec Grid Price (cents/kWh)</label>
@@ -1041,14 +1055,11 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
                     setGridPrice(e.target.value);
                   }}
                   onBlur={handlePriceChange}
-                  placeholder="12.00"
+                  placeholder="20.00"
                   step="0.01"
                   min="0"
                   max="1000"
                 />
-                <div className="muted" style={{ marginTop: "4px", fontSize: "11px" }}>
-                  Current grid electricity price in cents per kWh (used for savings calculations)
-                </div>
               </div>
             </div>
           </div>
