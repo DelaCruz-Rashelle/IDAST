@@ -24,6 +24,7 @@ export default function Home() {
   const [ipEditMode, setIpEditMode] = useState(false);
   const [ipEditValue, setIpEditValue] = useState("");
   const ipInputFocusedRef = useRef(false);
+  const deviceNameInputFocusedRef = useRef(false);
   const [wifiSSID, setWifiSSID] = useState("");
   const [wifiPassword, setWifiPassword] = useState("");
   const [wifiEditMode, setWifiEditMode] = useState(false);
@@ -119,7 +120,9 @@ export default function Home() {
         setData(json);
         setError(""); // Clear error on success
         if (json.manual !== undefined) setManual(json.manual);
-        if (json.deviceName) setCurrentDevice(json.deviceName);
+        if (json.deviceName && !deviceNameInputFocusedRef.current) {
+          setCurrentDevice(json.deviceName);
+        }
         if (json.gridPrice && typeof window !== "undefined" && document.activeElement?.id !== "gridPrice") {
           setGridPrice(json.gridPrice.toFixed(2));
         }
@@ -998,440 +1001,54 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
             </div>
           </div>
 
-          <div className="card" style={{ gridColumn: "1/-1", border: "2px solid rgba(47, 210, 122, 0.3)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderBottom: "1px solid var(--grid)", background: "rgba(47, 210, 122, 0.05)" }}>
-              <div>
-                <h3 style={{ margin: 0, color: "#2fd27a", fontSize: "15px" }}>🔌 WiFi Configuration</h3>
-                <div style={{ fontSize: "11px", color: "var(--muted)", marginTop: "4px" }}>
-                  Update WiFi when officials get a new network - Works even when ESP32 is offline
+          <div className="card">
+            <h3>Device Registration & Settings</h3>
+            <div className="content">
+              <div className="form-group">
+                <label htmlFor="deviceName">Device Name</label>
+                <input
+                  type="text"
+                  id="deviceName"
+                  value={currentDevice}
+                  onFocus={() => { deviceNameInputFocusedRef.current = true; }}
+                  onBlur={async () => {
+                    deviceNameInputFocusedRef.current = false;
+                    if (currentDevice.trim().length > 0) {
+                      try {
+                        await sendControl({ deviceName: currentDevice.trim() });
+                      } catch (e) {
+                        console.error("Failed to save device name:", e);
+                      }
+                    }
+                  }}
+                  onChange={(e) => {
+                    setCurrentDevice(e.target.value);
+                  }}
+                  placeholder="Enter device name"
+                  maxLength={23}
+                />
+                <div className="muted" style={{ marginTop: "4px", fontSize: "11px" }}>
+                  Name of the device being charged (e.g., Galaxy_S24, iPhone_15)
                 </div>
               </div>
-              {!wifiEditMode && (
-                <button
-                  className="manual-btn"
-                  style={{ fontSize: "12px", padding: "8px 16px", background: "linear-gradient(180deg, #2fd27a, #11a85a)" }}
-                  onClick={() => {
-                    setWifiEditSSID(wifiSSID);
-                    setWifiEditPassword("");
-                    setWifiEditMode(true);
-                    setError("");
-                  }}
-                >
-                  Edit
-                </button>
-              )}
-            </div>
-            <div className="content">
               <div className="form-group">
-                <label htmlFor="wifiSSID">WiFi Network Name (SSID)</label>
-                {wifiEditMode ? (
-                  <>
-                    <input
-                      type="text"
-                      id="wifiSSID"
-                      value={wifiEditSSID}
-                      onFocus={() => { wifiInputFocusedRef.current = true; }}
-                      onBlur={() => { wifiInputFocusedRef.current = false; }}
-                      onChange={(e) => {
-                        setWifiEditSSID(e.target.value);
-                        if (error && error.includes("WiFi")) {
-                          setError("");
-                        }
-                      }}
-                      maxLength={63}
-                      placeholder="Enter WiFi network name"
-                    />
-                    <div className="form-group" style={{ marginTop: "12px" }}>
-                      <label htmlFor="wifiPassword">WiFi Password</label>
-                      <input
-                        type="password"
-                        id="wifiPassword"
-                        value={wifiEditPassword}
-                        onFocus={() => { wifiInputFocusedRef.current = true; }}
-                        onBlur={() => { wifiInputFocusedRef.current = false; }}
-                        onChange={(e) => {
-                          setWifiEditPassword(e.target.value);
-                          if (error && error.includes("WiFi")) {
-                            setError("");
-                          }
-                        }}
-                        maxLength={63}
-                        placeholder="Enter WiFi password (leave blank to keep current)"
-                      />
-                    </div>
-                    <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
-                      <button
-                        className="manual-btn"
-                        style={{ flex: 1 }}
-                        onClick={async () => {
-                          if (wifiEditSSID.length === 0) {
-                            setError("WiFi SSID cannot be empty");
-                            return;
-                          }
-                          if (wifiEditSSID.length > 63) {
-                            setError("WiFi SSID must be 63 characters or less");
-                            return;
-                          }
-                          setWifiSaving(true);
-                          setError("");
-                          try {
-                            const params = { wifiSSID: wifiEditSSID };
-                            if (wifiEditPassword.length > 0) {
-                              params.wifiPassword = wifiEditPassword;
-                            }
-                            await sendControl(params);
-                            setWifiSSID(wifiEditSSID);
-                            setWifiEditMode(false);
-                            setWifiEditPassword("");
-                            setTimeout(() => setWifiSaving(false), 1000);
-                            alert("✅ WiFi settings saved successfully!\n\nESP32 will restart and connect to the new WiFi network.\n\n💡 If ESP32 is currently offline, connect to 'Solar_Capstone_Admin' WiFi to access it directly for configuration.");
-                          } catch (e) {
-                            // If save fails, offer to save locally for later
-                            const saveLocally = confirm("Failed to connect to ESP32. Would you like to save these WiFi settings locally? They will be applied when ESP32 is accessible.\n\n(You can also connect to 'Solar_Capstone_Admin' WiFi and configure directly)");
-                            if (saveLocally) {
-                              if (typeof window !== "undefined") {
-                                localStorage.setItem("pendingWifiSSID", wifiEditSSID);
-                                if (wifiEditPassword.length > 0) {
-                                  localStorage.setItem("pendingWifiPassword", wifiEditPassword);
-                                }
-                              }
-                              setPendingWifiSSID(wifiEditSSID);
-                              setWifiSSID(wifiEditSSID);
-                              setWifiEditMode(false);
-                              setWifiEditPassword("");
-                              alert("WiFi settings saved locally. They will be applied when ESP32 is accessible.");
-                            }
-                            setWifiSaving(false);
-                          }
-                        }}
-                        disabled={wifiSaving || !wifiEditSSID}
-                      >
-                        {wifiSaving ? "Saving..." : "Save"}
-                      </button>
-                      <button
-                        className="manual-btn alt"
-                        style={{ flex: 1 }}
-                        onClick={() => {
-                          setWifiEditMode(false);
-                          setWifiEditSSID(wifiSSID);
-                          setWifiEditPassword("");
-                          setError("");
-                        }}
-                        disabled={wifiSaving}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="mono" style={{ 
-                      background: "#0e1833", 
-                      border: "1px solid var(--grid)", 
-                      borderRadius: "8px", 
-                      padding: "12px 16px",
-                      fontFamily: "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace",
-                      fontSize: "14px",
-                      color: wifiSSID ? "var(--ink)" : "var(--muted)"
-                    }}>
-                      {wifiSSID || "Not configured"}
-                    </div>
-                    <div className="muted" style={{ marginTop: "6px", fontSize: "11px", lineHeight: "1.4" }}>
-                      <strong>Current WiFi:</strong> ESP32 will connect to this network when it has internet access.
-                      <br />
-                      <strong>To update:</strong> Click "Update WiFi" above, enter new WiFi credentials, and save.
-                      <br />
-                      <br />
-                      <strong>📱 Accessing from Vercel Website:</strong>
-                      <br />• If ESP32 is online: Settings save immediately
-                      <br />• If ESP32 is offline: Settings are saved locally and applied when ESP32 is accessible
-                      <br />
-                      <br />
-                      <strong>💡 Direct Access (When ESP32 is Offline):</strong>
-                      <br />Connect to "Solar_Capstone_Admin" WiFi → Open http://192.168.4.1 → Configure WiFi
-                    </div>
-                    {pendingWifiSSID && (
-                      <div style={{ marginTop: "12px", padding: "10px", background: "rgba(245, 179, 66, 0.1)", border: "1px solid rgba(245, 179, 66, 0.3)", borderRadius: "8px" }}>
-                        <div style={{ fontSize: "11px", color: "var(--ink)" }}>
-                          <strong>⏳ Pending WiFi Settings:</strong> {pendingWifiSSID}
-                          <br />
-                          <span style={{ fontSize: "10px", color: "var(--muted)" }}>
-                            These will be applied automatically when ESP32 is accessible
-                          </span>
-                        </div>
-                      </div>
-                    )}
-                    {staIP && staIP !== "Not connected" && (
-                      <div style={{ marginTop: "12px", padding: "10px", background: "rgba(47, 210, 122, 0.1)", border: "1px solid rgba(47, 210, 122, 0.3)", borderRadius: "8px" }}>
-                        <div style={{ fontSize: "12px", marginBottom: "8px", color: "var(--ink)" }}>
-                          <strong>📡 ESP32 WiFi IP Address:</strong>
-                        </div>
-                        <div className="mono" style={{ 
-                          fontSize: "16px", 
-                          fontWeight: "700", 
-                          color: "#2fd27a",
-                          marginBottom: "8px"
-                        }}>
-                          {staIP}
-                        </div>
-                        <div style={{ fontSize: "11px", color: "var(--muted)", lineHeight: "1.4" }}>
-                          Use this IP to set up Cloudflare tunnel:
-                          <br />
-                          <code style={{ 
-                            background: "rgba(0,0,0,0.3)", 
-                            padding: "4px 8px", 
-                            borderRadius: "4px",
-                            fontSize: "10px",
-                            display: "inline-block",
-                            marginTop: "4px"
-                          }}>
-                            cloudflared tunnel --url http://{staIP}:80
-                          </code>
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="card">
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderBottom: "1px solid var(--grid)" }}>
-              <h3 style={{ margin: 0 }}>Connection Mode</h3>
-              {!tunnelEditMode && (
-                <button
-                  className="manual-btn alt"
-                  style={{ fontSize: "11px", padding: "6px 12px" }}
-                  onClick={() => {
-                    setTunnelEditMode(true);
-                    setError("");
+                <label htmlFor="gridPrice">Batelec Grid Price (cents/kWh)</label>
+                <input
+                  type="number"
+                  id="gridPrice"
+                  value={gridPrice}
+                  onChange={(e) => {
+                    setGridPrice(e.target.value);
                   }}
-                >
-                  Edit
-                </button>
-              )}
-            </div>
-            <div className="content">
-              <div className="form-group">
-                <label htmlFor="tunnelURL">Tunnel URL (from cloudflared)</label>
-                {tunnelEditMode ? (
-                  <>
-                    <input
-                      type="text"
-                      id="tunnelURL"
-                      value={customTunnelURL}
-                      onChange={(e) => {
-                        setCustomTunnelURL(e.target.value);
-                        if (error && error.includes("Tunnel")) {
-                          setError("");
-                        }
-                      }}
-                      placeholder="https://your-tunnel-url.trycloudflare.com"
-                      style={{ fontFamily: "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" }}
-                    />
-                    <div className="muted" style={{ marginTop: "6px", fontSize: "11px", lineHeight: "1.4" }}>
-                      Enter the URL from: <code>cloudflared tunnel --url http://[ESP32_IP]:80</code>
-                    </div>
-                    <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
-                      <button
-                        className="manual-btn"
-                        style={{ flex: 1 }}
-                        onClick={() => {
-                          if (customTunnelURL.length > 0) {
-                            // Validate URL format
-                            try {
-                              new URL(customTunnelURL);
-                              localStorage.setItem("customTunnelURL", customTunnelURL);
-                              setTunnelEditMode(false);
-                              setError("");
-                              alert("Tunnel URL saved! The dashboard will now use this URL.");
-                            } catch (e) {
-                              setError("Invalid URL format. Please enter a valid URL (e.g., https://example.trycloudflare.com)");
-                            }
-                          } else {
-                            // Clear the custom URL
-                            localStorage.removeItem("customTunnelURL");
-                            setCustomTunnelURL("");
-                            setTunnelEditMode(false);
-                            setError("");
-                            alert("Tunnel URL cleared. Using default from environment variable.");
-                          }
-                        }}
-                      >
-                        Save
-                      </button>
-                      <button
-                        className="manual-btn alt"
-                        style={{ flex: 1 }}
-                        onClick={() => {
-                          setTunnelEditMode(false);
-                          setError("");
-                        }}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="mono" style={{ 
-                      background: "#0e1833", 
-                      border: "1px solid var(--grid)", 
-                      borderRadius: "8px", 
-                      padding: "12px 16px",
-                      fontFamily: "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace",
-                      fontSize: "14px",
-                      color: customTunnelURL ? "var(--ink)" : "var(--muted)",
-                      wordBreak: "break-all"
-                    }}>
-                      {customTunnelURL || API_BASE_URL || "Not configured"}
-                    </div>
-                    <div className="muted" style={{ marginTop: "6px", fontSize: "11px", lineHeight: "1.4" }}>
-                      {customTunnelURL ? "Custom tunnel URL (saved in browser)" : API_BASE_URL ? "Using environment variable" : "Configure tunnel URL to connect to ESP32 remotely"}
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="card">
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderBottom: "1px solid var(--grid)" }}>
-              <h3 style={{ margin: 0 }}>Device IP Configuration</h3>
-              {!ipEditMode && (
-                <button
-                  className="manual-btn alt"
-                  style={{ fontSize: "11px", padding: "6px 12px" }}
-                  onClick={() => {
-                    setIpEditValue(deviceIP);
-                    setIpEditMode(true);
-                    setError("");
-                  }}
-                >
-                  Edit
-                </button>
-              )}
-            </div>
-            <div className="content">
-              <div className="form-group">
-                <label htmlFor="deviceIP">ESP32 Access Point IP Address</label>
-                {ipEditMode ? (
-                  <>
-                    <input
-                      type="text"
-                      id="deviceIP"
-                      value={ipEditValue}
-                      onFocus={() => { ipInputFocusedRef.current = true; }}
-                      onChange={(e) => {
-                        const value = e.target.value;
-                        setIpEditValue(value);
-                        if (error && error.includes("Invalid IP")) {
-                          setError("");
-                        }
-                      }}
-                      onBlur={(e) => {
-                        ipInputFocusedRef.current = false;
-                        const value = e.target.value;
-                        if (value.length > 0) {
-                          const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
-                          if (!ipRegex.test(value)) {
-                            setError("Invalid IP format. Use format: XXX.XXX.XXX.XXX (e.g., 192.168.4.1)");
-                          } else {
-                            const parts = value.split(".");
-                            let isValid = true;
-                            for (let part of parts) {
-                              const num = parseInt(part, 10);
-                              if (isNaN(num) || num < 0 || num > 255) {
-                                isValid = false;
-                                break;
-                              }
-                            }
-                            if (!isValid) {
-                              setError("Invalid IP address. Each number must be between 0-255 (e.g., 192.168.4.1)");
-                            } else {
-                              setError("");
-                            }
-                          }
-                        }
-                      }}
-                      maxLength={15}
-                      className="mono"
-                      style={{ fontFamily: "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" }}
-                    />
-                    <div className="muted" style={{ marginTop: "6px", fontSize: "11px", lineHeight: "1.4" }}>
-                      Format: XXX.XXX.XXX.XXX (e.g., 192.168.4.1)
-                    </div>
-                    <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
-                      <button
-                        className="manual-btn"
-                        style={{ flex: 1 }}
-                        onClick={async () => {
-                          const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
-                          const parts = ipEditValue.split(".");
-                          let isValid = ipRegex.test(ipEditValue);
-                          if (isValid) {
-                            for (let part of parts) {
-                              const num = parseInt(part, 10);
-                              if (num < 0 || num > 255 || isNaN(num)) {
-                                isValid = false;
-                                break;
-                              }
-                            }
-                          }
-                          
-                          if (!isValid || ipEditValue.length === 0) {
-                            setError("Invalid IP address. Each number must be between 0-255 (e.g., 192.168.4.1)");
-                            return;
-                          }
-                          setIpSaving(true);
-                          setError("");
-                          try {
-                            await sendControl({ deviceIP: ipEditValue });
-                            setDeviceIP(ipEditValue);
-                            setIpEditMode(false);
-                            setTimeout(() => setIpSaving(false), 1000);
-                          } catch (e) {
-                            setError("Failed to save IP configuration. Please check your connection.");
-                            setIpSaving(false);
-                          }
-                        }}
-                        disabled={ipSaving || !ipEditValue}
-                      >
-                        {ipSaving ? "Saving..." : "Save"}
-                      </button>
-                      <button
-                        className="manual-btn alt"
-                        style={{ flex: 1 }}
-                        onClick={() => {
-                          setIpEditMode(false);
-                          setIpEditValue(deviceIP);
-                          setError("");
-                        }}
-                        disabled={ipSaving}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="mono" style={{ 
-                      background: "#0e1833", 
-                      border: "1px solid var(--grid)", 
-                      borderRadius: "8px", 
-                      padding: "12px 16px",
-                      fontFamily: "ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace",
-                      fontSize: "14px",
-                      color: deviceIP ? "var(--ink)" : "var(--muted)"
-                    }}>
-                      {deviceIP || "Not configured"}
-                    </div>
-                    <div className="muted" style={{ marginTop: "6px", fontSize: "11px", lineHeight: "1.4" }}>
-                      This is the IP address of the ESP32's Access Point mode. Click Edit to change it.
-                    </div>
-                  </>
-                )}
+                  onBlur={handlePriceChange}
+                  placeholder="12.00"
+                  step="0.01"
+                  min="0"
+                  max="1000"
+                />
+                <div className="muted" style={{ marginTop: "4px", fontSize: "11px" }}>
+                  Current grid electricity price in cents per kWh (used for savings calculations)
+                </div>
               </div>
             </div>
           </div>
