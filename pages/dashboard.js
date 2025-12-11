@@ -86,11 +86,18 @@ export default function Home() {
       return `/api/proxy?ip=${staIP}`;
     }
     
-    // Use custom tunnel URL from localStorage if available, otherwise fallback to env variable
+    // Use custom tunnel URL from localStorage if available
     if (customTunnelURL && customTunnelURL.length > 0) {
-      return customTunnelURL;
+      // For custom tunnel URLs, use proxy to avoid CORS issues when deployed
+      return `/api/tunnel-proxy?endpoint=`;
     }
-    return API_BASE_URL;
+    
+    // If API_BASE_URL is set (from env), use proxy to avoid CORS issues
+    if (API_BASE_URL && API_BASE_URL.length > 0) {
+      return `/api/tunnel-proxy?endpoint=`;
+    }
+    
+    return "";
   };
 
   // Fetch telemetry data
@@ -101,7 +108,12 @@ export default function Home() {
       return;
     }
     try {
-      const res = await fetch(`${apiUrl}/data`);
+      // If using proxy, append endpoint; otherwise use full URL
+      const fetchUrl = apiUrl.includes('/api/') 
+        ? `${apiUrl}/data` 
+        : `${apiUrl}/data`;
+      
+      const res = await fetch(fetchUrl);
       if (res.ok) {
         const json = await res.json();
         setData(json);
@@ -229,7 +241,13 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
       throw new Error("API URL not configured");
     }
     const body = new URLSearchParams(params).toString();
-    const res = await fetch(`${apiUrl}/control`, {
+    
+    // If using proxy, append endpoint; otherwise use full URL
+    const fetchUrl = apiUrl.includes('/api/') 
+      ? `${apiUrl}/control` 
+      : `${apiUrl}/control`;
+    
+    const res = await fetch(fetchUrl, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body
@@ -270,7 +288,12 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
     const apiUrl = getApiUrl();
     if (!apiUrl) return;
     try {
-      const res = await fetch(`${apiUrl}/api/history`);
+      // If using proxy, append endpoint; otherwise use full URL
+      const fetchUrl = apiUrl.includes('/api/') 
+        ? `${apiUrl}/api/history` 
+        : `${apiUrl}/api/history`;
+      
+      const res = await fetch(fetchUrl);
       if (res.ok) {
         const text = await res.text();
         setHistoryData(text);
