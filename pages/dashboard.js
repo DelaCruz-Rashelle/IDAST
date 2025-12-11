@@ -52,6 +52,8 @@ export default function Home() {
   const historyChartRef = useRef(null);
   const sensorHistory = useRef({ top: [], left: [], right: [] });
   const gridPriceDebounceRef = useRef(null);
+  const historyPointsRef = useRef([]);
+  const [tooltip, setTooltip] = useState(null);
 
   const REPORT_END = new Date();
   const REPORT_START = new Date(REPORT_END.getTime() - 60 * 24 * 3600 * 1000);
@@ -324,34 +326,59 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
     
     const points = lines.map((l, idx) => {
       const p = l.split(",");
+      const timestamp = parseInt(p[0]) || 0;
+      // Handle both Unix timestamps (seconds) and millis timestamps
+      // If timestamp is less than 1e10, it's likely in seconds, multiply by 1000
+      // If timestamp is very large (> 1e12), it's already in milliseconds
+      let date;
+      if (timestamp > 1e12) {
+        // Already in milliseconds
+        date = new Date(timestamp);
+      } else if (timestamp > 1e9) {
+        // Unix timestamp in seconds, convert to milliseconds
+        date = new Date(timestamp * 1000);
+      } else {
+        // Likely millis since boot, use relative date (days ago based on index)
+        const daysAgo = lines.length - idx - 1;
+        date = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+      }
       return {
         index: idx,
+        timestamp: timestamp,
         energyWh: parseFloat(p[1]) || 0,
         battery: parseFloat(p[2]) || 0,
-        device: p[3] || "Unknown"
+        device: p[3] || "Unknown",
+        date: date
       };
     });
     
     points.forEach(p => { p.energyKWh = p.energyWh / 1000.0; });
     const maxEnergyKWh = Math.max(...points.map(p => p.energyKWh), 0.001);
     
+    // Store points with screen coordinates for hover detection
+    historyPointsRef.current = points.map((p, i) => {
+      const x = 20 + (i / (points.length - 1 || 1)) * w;
+      const y = 20 + h - (p.energyKWh / maxEnergyKWh) * h;
+      return {
+        ...p,
+        screenX: x,
+        screenY: y
+      };
+    });
+    
     ctx.strokeStyle = "#2fd27a";
     ctx.lineWidth = 2;
     ctx.beginPath();
-    points.forEach((p, i) => {
-      const x = 20 + (i / (points.length - 1 || 1)) * w;
-      const y = 20 + h - (p.energyKWh / maxEnergyKWh) * h;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
+    historyPointsRef.current.forEach((p, i) => {
+      if (i === 0) ctx.moveTo(p.screenX, p.screenY);
+      else ctx.lineTo(p.screenX, p.screenY);
     });
     ctx.stroke();
     
     ctx.fillStyle = "#2fd27a";
-    points.forEach((p, i) => {
-      const x = 20 + (i / (points.length - 1 || 1)) * w;
-      const y = 20 + h - (p.energyKWh / maxEnergyKWh) * h;
+    historyPointsRef.current.forEach((p) => {
       ctx.beginPath();
-      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.arc(p.screenX, p.screenY, 3, 0, Math.PI * 2);
       ctx.fill();
     });
     
@@ -426,6 +453,51 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
         canvas.height = 300;
         if (historyData) drawHistoryChart(historyData);
       }
+      
+      // Add mouse event handlers for tooltip
+      const handleMouseMove = (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        
+        // Find closest point within 10px radius
+        let closestPoint = null;
+        let minDist = Infinity;
+        
+        historyPointsRef.current.forEach((point) => {
+          const dist = Math.sqrt(Math.pow(x - point.screenX, 2) + Math.pow(y - point.screenY, 2));
+          if (dist < 10 && dist < minDist) {
+            minDist = dist;
+            closestPoint = point;
+          }
+        });
+        
+        if (closestPoint) {
+          const dateStr = closestPoint.date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+          setTooltip({
+            x: e.clientX,
+            y: e.clientY,
+            date: dateStr,
+            energy: closestPoint.energyKWh.toFixed(3),
+            battery: closestPoint.battery.toFixed(1),
+            device: closestPoint.device
+          });
+        } else {
+          setTooltip(null);
+        }
+      };
+      
+      const handleMouseLeave = () => {
+        setTooltip(null);
+      };
+      
+      canvas.addEventListener("mousemove", handleMouseMove);
+      canvas.addEventListener("mouseleave", handleMouseLeave);
+      
+      return () => {
+        canvas.removeEventListener("mousemove", handleMouseMove);
+        canvas.removeEventListener("mouseleave", handleMouseLeave);
+      };
     }
   }, [historyData]);
 
@@ -1107,8 +1179,36 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
           <div className="card" style={{ gridColumn: "1/-1" }}>
             <h3>Monthly Report — Energy History</h3>
             <div className="content">
-              <div className="history-chart">
+              <div className="history-chart" style={{ position: "relative" }}>
                 <canvas ref={historyChartRef} width={800} height={300}></canvas>
+                {tooltip && (
+                  <div
+                    style={{
+                      position: "fixed",
+                      left: typeof window !== "undefined" ? Math.min(tooltip.x + 10, window.innerWidth - 220) : tooltip.x + 10,
+                      top: Math.max(tooltip.y - 80, 10),
+                      background: "rgba(18, 27, 51, 0.95)",
+                      border: "1px solid var(--grid)",
+                      borderRadius: "8px",
+                      padding: "10px 12px",
+                      fontSize: "12px",
+                      color: "var(--ink)",
+                      pointerEvents: "none",
+                      zIndex: 1000,
+                      boxShadow: "0 4px 12px rgba(0, 0, 0, 0.4)",
+                      maxWidth: "200px",
+                      backdropFilter: "blur(10px)"
+                    }}
+                  >
+                    <div style={{ fontWeight: "600", marginBottom: "4px" }}>{tooltip.date}</div>
+                    <div style={{ color: "var(--muted)", fontSize: "11px" }}>
+                      {tooltip.energy} kWh · {tooltip.battery}% batt
+                    </div>
+                    <div style={{ color: "var(--muted)", fontSize: "11px", marginTop: "2px" }}>
+                      {tooltip.device}
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="history-meta">
                 <h4>Device highlights (rolling 60 days)</h4>
@@ -1168,7 +1268,28 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
                     </tr>
                     <tr>
                       <td>Most Active Device</td>
-                      <td>—</td>
+                      <td>
+                        {historyData
+                          ? (() => {
+                              const lines = historyData.trim().split("\n").slice(1);
+                              const deviceEnergy = {};
+                              lines.forEach((line) => {
+                                const parts = line.split(",");
+                                if (parts.length >= 4) {
+                                  const device = parts[3] || "Unknown";
+                                  const energy = parseFloat(parts[1]) || 0;
+                                  deviceEnergy[device] = (deviceEnergy[device] || 0) + energy;
+                                }
+                              });
+                              const entries = Object.entries(deviceEnergy);
+                              if (entries.length === 0) return "—";
+                              const mostActive = entries.reduce((max, [device, energy]) =>
+                                energy > max[1] ? [device, energy] : max
+                              );
+                              return mostActive[0] !== "Unknown" ? mostActive[0] : "—";
+                            })()
+                          : "—"}
+                      </td>
                     </tr>
                   </tbody>
                 </table>
