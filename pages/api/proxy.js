@@ -24,14 +24,33 @@ export default async function handler(req, res) {
       body: req.method !== 'GET' ? JSON.stringify(req.body) : undefined,
     });
 
-    const data = await response.json();
+    // Handle different response types (JSON or CSV)
+    const contentType = response.headers.get('content-type') || '';
+    let data;
+    
+    if (contentType.includes('application/json')) {
+      data = await response.json();
+    } else {
+      // For CSV or text responses (like /api/history endpoint)
+      data = await response.text();
+    }
     
     // Return ESP32 response with CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     
-    return res.status(response.status).json(data);
+    // Preserve content type
+    if (contentType) {
+      res.setHeader('Content-Type', contentType);
+    }
+    
+    // Return appropriate format
+    if (contentType.includes('application/json')) {
+      return res.status(response.status).json(data);
+    } else {
+      return res.status(response.status).send(data);
+    }
   } catch (error) {
     console.error('Proxy error:', error);
     return res.status(500).json({ 

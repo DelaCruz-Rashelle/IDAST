@@ -294,10 +294,21 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
     const apiUrl = getApiUrl();
     if (!apiUrl) return;
     try {
-      // If using proxy, append endpoint; otherwise use full URL
-      const fetchUrl = apiUrl.includes('/api/') 
-        ? `${apiUrl}/api/history` 
-        : `${apiUrl}/api/history`;
+      let fetchUrl;
+      
+      // If using proxy mode, add endpoint as query parameter
+      if (apiUrl.includes('/api/proxy')) {
+        // Extract IP from existing URL and add endpoint parameter
+        const urlObj = new URL(apiUrl, window.location.origin);
+        urlObj.searchParams.set('endpoint', '/api/history');
+        fetchUrl = urlObj.pathname + urlObj.search;
+      } else if (apiUrl.includes('/api/tunnel-proxy')) {
+        // For tunnel-proxy, endpoint is already a query parameter
+        fetchUrl = `${apiUrl}/api/history`;
+      } else {
+        // Direct connection (AP mode)
+        fetchUrl = `${apiUrl}/api/history`;
+      }
       
       const res = await fetch(fetchUrl);
       if (res.ok) {
