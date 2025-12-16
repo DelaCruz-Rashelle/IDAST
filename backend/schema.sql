@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS telemetry (
   tilt_angle INT NULL,
   pan_angle INT NULL,
   pan_target INT NULL,
-  manual TINYINT(1) NULL,
+  `manual` TINYINT(1) NULL,
   steady TINYINT(1) NULL,
 
   power_w DECIMAL(10,2) NULL,
