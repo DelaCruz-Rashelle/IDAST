@@ -51,49 +51,79 @@ app.get("/api/history.csv", async (req, res) => {
     if (!Number.isFinite(days) || days <= 0) days = 60;
     days = Math.min(days, 365);
 
-    const [rows] = await pool.query(
-      `
-      SELECT
-        UNIX_TIMESTAMP(DATE(ts)) AS day_ts_s,
-        MIN(energy_wh) AS min_energy_wh,
-        MAX(energy_wh) AS max_energy_wh,
-        AVG(battery_pct) AS avg_battery_pct,
-        SUBSTRING_INDEX(GROUP_CONCAT(COALESCE(device_name,'Unknown') ORDER BY ts DESC SEPARATOR ','), ',', 1) AS last_device_name,
-        MIN(ts) AS first_ts,
-        MAX(ts) AS last_ts
-      FROM telemetry
-      WHERE ts >= DATE_SUB(NOW(), INTERVAL ? DAY)
-      GROUP BY DATE(ts)
-      ORDER BY DATE(ts) ASC
-      `,
-      [days]
-    );
-
-    const lines = [];
-    lines.push("timestamp,energy_wh,battery_pct,device_name,session_min");
-    for (const r of rows) {
-      const dayTs = Number(r.day_ts_s) || 0;
-      const minE = r.min_energy_wh === null ? null : Number(r.min_energy_wh);
-      const maxE = r.max_energy_wh === null ? null : Number(r.max_energy_wh);
-      let energyWh = null;
-      if (Number.isFinite(minE) && Number.isFinite(maxE)) {
-        energyWh = Math.max(0, maxE - minE);
-      }
-      const batt = r.avg_battery_pct === null ? "" : Number(r.avg_battery_pct).toFixed(1);
-      const dev = (r.last_device_name || "Unknown").replaceAll(",", " ");
-
-      // best-effort session minutes for display (not used by dashboard charts)
-      const first = r.first_ts ? new Date(r.first_ts).getTime() : null;
-      const last = r.last_ts ? new Date(r.last_ts).getTime() : null;
-      const sessionMin =
-        first && last && last >= first ? Math.round((last - first) / 60000) : "";
-
-      lines.push(`${dayTs},${energyWh ?? ""},${batt},${dev},${sessionMin}`);
+    console.log(`[history.csv] Querying history for ${days} days`);
+    
+    // First, verify database connection and set GROUP_CONCAT max length to avoid truncation
+    const conn = await pool.getConnection();
+    try {
+      await conn.query("SELECT 1");
+      // Increase GROUP_CONCAT max length to avoid truncation errors
+      await conn.query("SET SESSION group_concat_max_len = 10000");
+    } catch (connErr) {
+      conn.release();
+      console.error("[history.csv] Database connection check failed:", connErr);
+      throw new Error(`Database connection failed: ${connErr?.message || String(connErr)}`);
     }
+    
+    try {
+      const [rows] = await conn.query(
+        `
+        SELECT
+          UNIX_TIMESTAMP(DATE(ts)) AS day_ts_s,
+          MIN(energy_wh) AS min_energy_wh,
+          MAX(energy_wh) AS max_energy_wh,
+          AVG(battery_pct) AS avg_battery_pct,
+          SUBSTRING_INDEX(
+            GROUP_CONCAT(
+              COALESCE(device_name,'Unknown') 
+              ORDER BY ts DESC 
+              SEPARATOR ','
+            ), 
+            ',', 
+            1
+          ) AS last_device_name,
+          MIN(ts) AS first_ts,
+          MAX(ts) AS last_ts
+        FROM telemetry
+        WHERE ts >= DATE_SUB(NOW(), INTERVAL ? DAY)
+        GROUP BY DATE(ts)
+        ORDER BY DATE(ts) ASC
+        `,
+        [days]
+      );
+      
+      console.log(`[history.csv] Query returned ${rows.length} rows`);
+      
+      const lines = [];
+      lines.push("timestamp,energy_wh,battery_pct,device_name,session_min");
+      for (const r of rows) {
+        const dayTs = Number(r.day_ts_s) || 0;
+        const minE = r.min_energy_wh === null ? null : Number(r.min_energy_wh);
+        const maxE = r.max_energy_wh === null ? null : Number(r.max_energy_wh);
+        let energyWh = null;
+        if (Number.isFinite(minE) && Number.isFinite(maxE)) {
+          energyWh = Math.max(0, maxE - minE);
+        }
+        const batt = r.avg_battery_pct === null ? "" : Number(r.avg_battery_pct).toFixed(1);
+        const dev = (r.last_device_name || "Unknown").replaceAll(",", " ");
 
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    return res.status(200).send(lines.join("\n") + "\n");
+        // best-effort session minutes for display (not used by dashboard charts)
+        const first = r.first_ts ? new Date(r.first_ts).getTime() : null;
+        const last = r.last_ts ? new Date(r.last_ts).getTime() : null;
+        const sessionMin =
+          first && last && last >= first ? Math.round((last - first) / 60000) : "";
+
+        lines.push(`${dayTs},${energyWh ?? ""},${batt},${dev},${sessionMin}`);
+      }
+
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      return res.status(200).send(lines.join("\n") + "\n");
+    } finally {
+      conn.release();
+    }
   } catch (e) {
+    console.error("[history.csv] Error:", e);
+    console.error("[history.csv] Error stack:", e?.stack);
     return res.status(500).json({ ok: false, error: e?.message || String(e) });
   }
 });

@@ -309,7 +309,20 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
           drawHistoryChart(text);
         } else {
           const errorText = await res.text();
-          setHistoryError(`Railway history fetch failed: ${res.status} ${res.statusText}`);
+          // Try to parse as JSON to get detailed error message
+          let errorMsg = `Railway history fetch failed: ${res.status} ${res.statusText}`;
+          try {
+            const errorJson = JSON.parse(errorText);
+            if (errorJson.error) {
+              errorMsg = `Railway history error: ${errorJson.error}`;
+            }
+          } catch (e) {
+            // Not JSON, use the text as-is
+            if (errorText && errorText.trim()) {
+              errorMsg = `Railway history error: ${errorText.substring(0, 200)}`;
+            }
+          }
+          setHistoryError(errorMsg);
           console.error("Railway history fetch failed:", res.status, errorText);
         }
         return;
