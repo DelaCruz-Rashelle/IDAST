@@ -1,5 +1,5 @@
 import express from "express";
-import { dbPing } from "./db.js";
+import { dbPing, initSchema } from "./db.js";
 import { startIngestLoop } from "./ingest.js";
 import { pool } from "./db.js";
 
@@ -132,9 +132,23 @@ app.get("/api/telemetry", async (req, res) => {
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 
-const server = app.listen(PORT, () => {
-  console.log(`Listening on port ${PORT}`);
-});
+// Initialize database schema before starting server
+async function startServer() {
+  try {
+    await initSchema();
+  } catch (e) {
+    console.error("Schema initialization failed:", e);
+    process.exit(1);
+  }
+
+  const server = app.listen(PORT, () => {
+    console.log(`Listening on port ${PORT}`);
+  });
+
+  return server;
+}
+
+const server = await startServer();
 
 // Start ingestion loop unless explicitly disabled
 if (process.env.INGEST_ENABLED !== "false") {

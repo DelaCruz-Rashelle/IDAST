@@ -1,5 +1,10 @@
 -- MySQL schema for ESP32 telemetry snapshots (Railway MySQL)
--- Apply once in your Railway MySQL console.
+-- 
+-- NOTE: This schema is now automatically applied when the backend starts.
+-- The initSchema() function in backend/src/db.js creates this table on startup.
+-- 
+-- This file is kept for reference/documentation purposes.
+-- You can still use it manually if needed, but it's not required.
 
 CREATE TABLE IF NOT EXISTS telemetry (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -42,5 +47,3 @@ CREATE TABLE IF NOT EXISTS telemetry (
 
   INDEX idx_ts (ts)
 );
-
-
