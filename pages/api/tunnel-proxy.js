@@ -24,11 +24,19 @@ export default async function handler(req, res) {
   const endpoint = req.query.endpoint || '/data';
   
   if (!tunnelUrl) {
-    return res.status(400).json({ error: 'Tunnel URL not configured. Set NEXT_PUBLIC_API_BASE_URL environment variable.' });
+    console.error('Tunnel proxy: NEXT_PUBLIC_API_BASE_URL not set');
+    return res.status(400).json({ 
+      error: 'Tunnel URL not configured. Set NEXT_PUBLIC_API_BASE_URL environment variable.',
+      endpoint: endpoint 
+    });
   }
 
-  // Construct full URL
-  const fullUrl = `${tunnelUrl}${endpoint}`;
+  // Construct full URL - ensure tunnelUrl doesn't end with / and endpoint starts with /
+  const cleanTunnelUrl = tunnelUrl.endsWith('/') ? tunnelUrl.slice(0, -1) : tunnelUrl;
+  const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const fullUrl = `${cleanTunnelUrl}${cleanEndpoint}`;
+  
+  console.log('Tunnel proxy: Forwarding request to', fullUrl);
 
   try {
     // Forward the request to the tunnel (server-side, no CORS issues)
@@ -88,9 +96,12 @@ export default async function handler(req, res) {
     }
   } catch (error) {
     console.error('Tunnel proxy error:', error);
+    console.error('Failed URL:', fullUrl);
     return res.status(500).json({ 
       error: 'Failed to connect via tunnel',
       message: error.message,
+      url: fullUrl,
+      endpoint: endpoint,
       details: 'Check if the Cloudflare tunnel is running and accessible'
     });
   }

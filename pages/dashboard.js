@@ -4,6 +4,7 @@ import Head from "next/head";
 import Link from "next/link";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+const RAILWAY_API_BASE_URL = process.env.NEXT_PUBLIC_RAILWAY_API_BASE_URL || "";
 
 export default function Home() {
   const router = useRouter();
@@ -291,9 +292,23 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
 
   // Load history
   const loadHistory = async () => {
-    const apiUrl = getApiUrl();
-    if (!apiUrl) return;
     try {
+      // Prefer Railway DB-backed history if configured (keeps realtime via ESP32 tunnel unchanged)
+      if (RAILWAY_API_BASE_URL) {
+        const base = RAILWAY_API_BASE_URL.endsWith("/")
+          ? RAILWAY_API_BASE_URL.slice(0, -1)
+          : RAILWAY_API_BASE_URL;
+        const res = await fetch(`${base}/api/history.csv?days=60`);
+        if (res.ok) {
+          const text = await res.text();
+          setHistoryData(text);
+          drawHistoryChart(text);
+        }
+        return;
+      }
+
+      const apiUrl = getApiUrl();
+      if (!apiUrl) return;
       let fetchUrl;
       
       // If using proxy mode, add endpoint as query parameter
