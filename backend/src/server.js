@@ -69,26 +69,33 @@ app.get("/api/history.csv", async (req, res) => {
       const [rows] = await conn.query(
         `
         SELECT
-          UNIX_TIMESTAMP(DATE(t1.ts)) AS day_ts_s,
-          MIN(t1.energy_wh) AS min_energy_wh,
-          MAX(t1.energy_wh) AS max_energy_wh,
-          AVG(t1.battery_pct) AS avg_battery_pct,
+          UNIX_TIMESTAMP(day_date) AS day_ts_s,
+          MIN(energy_wh) AS min_energy_wh,
+          MAX(energy_wh) AS max_energy_wh,
+          AVG(battery_pct) AS avg_battery_pct,
           COALESCE(
-            (SELECT t2.device_name 
+            (SELECT device_name 
              FROM telemetry t2 
-             WHERE DATE(t2.ts) = DATE(t1.ts) 
+             WHERE DATE(t2.ts) = day_date
                AND t2.device_name IS NOT NULL 
                AND t2.device_name != ''
              ORDER BY t2.ts DESC, t2.id DESC 
              LIMIT 1),
             'Unknown'
           ) AS last_device_name,
-          MIN(t1.ts) AS first_ts,
-          MAX(t1.ts) AS last_ts
-        FROM telemetry t1
-        WHERE t1.ts >= DATE_SUB(NOW(), INTERVAL ? DAY)
-        GROUP BY DATE(t1.ts)
-        ORDER BY DATE(t1.ts) ASC
+          MIN(ts) AS first_ts,
+          MAX(ts) AS last_ts
+        FROM (
+          SELECT 
+            DATE(ts) AS day_date,
+            ts,
+            energy_wh,
+            battery_pct
+          FROM telemetry
+          WHERE ts >= DATE_SUB(NOW(), INTERVAL ? DAY)
+        ) AS daily_data
+        GROUP BY day_date
+        ORDER BY day_date ASC
         `,
         [days]
       );
