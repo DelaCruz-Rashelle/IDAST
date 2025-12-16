@@ -58,7 +58,7 @@ export async function initSchema() {
         top INT NULL,
         \`left\` INT NULL,
         \`right\` INT NULL,
-        avg INT NULL,
+        \`avg\` INT NULL,
         horizontal_error INT NULL,
         vertical_error INT NULL,
 

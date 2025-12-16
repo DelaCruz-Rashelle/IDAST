@@ -53,7 +53,7 @@ export async function insertTelemetryRow(t) {
   const sql = `
     INSERT INTO telemetry (
       device_name,
-      top, \`left\`, \`right\`, avg, horizontal_error, vertical_error,
+      top, \`left\`, \`right\`, \`avg\`, horizontal_error, vertical_error,
       tilt_angle, pan_angle, pan_target, manual, steady,
       power_w, power_actual_w, temp_c,
       battery_pct, battery_v, efficiency,
