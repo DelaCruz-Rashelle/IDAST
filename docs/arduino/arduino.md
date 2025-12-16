@@ -25,8 +25,8 @@ const char* AP_SSID     = "Solar_Capstone_Admin";
 const char* AP_PASSWORD = "12345678";
 
 // === WiFi Station settings (for tunneling) ===
-const char* WIFI_SSID     = "ZTE_2.4G_2Q23pR_Plus";      // Replace with your WiFi network name
-const char* WIFI_PASSWORD = "7e7775gF";  // Replace with your WiFi password
+const char* WIFI_SSID     = "ZTE_2.4G_gTUNE3";      // Replace with your WiFi network name
+const char* WIFI_PASSWORD = "simbasimba";  // Replace with your WiFi password
 
 // === ESP-NOW MAC placeholders ===
 const uint8_t WIFI_CHANNEL = 1;
@@ -265,6 +265,11 @@ void log_history_point(const TelemetryPacket &pkt) {
 }
 
 void seed_placeholder_history() {
+  // NOTE: Placeholder history seeding is DISABLED by default to avoid confusion
+  // Uncomment the code below if you want demo/placeholder data for testing
+  // For production, leave this function empty to start with real data only
+  
+  /*
   File test = LittleFS.open("/history.csv", "r");
   bool needsSeed = true;
   if (test) {
@@ -298,6 +303,10 @@ void seed_placeholder_history() {
   }
   file.close();
   Serial.println("✅ Seeded placeholder history");
+  */
+  
+  // Start with empty history - real data will be logged as telemetry arrives
+  Serial.println("ℹ️ History seeding disabled - starting with empty history");
 }
 
 void handle_root() {
@@ -353,45 +362,46 @@ void sendTelemetryJson() {
     json += "\"gridPrice\":" + String(latestTelemetry.gridPrice, 2) + ",";
     json += "\"deviceName\":\"" + currentDevice + "\"";
   } else {
-    // If we don't yet have live telemetry, expose a stable-looking baseline snapshot
-    json += "\"mode\":\"live\",";
-    json += "\"top\":2800,";
-    json += "\"left\":2750,";
-    json += "\"right\":2780,";
-    json += "\"avg\":2775,";
-    json += "\"horizontalError\":-30,";
-    json += "\"verticalError\":120,";
-    json += "\"tiltAngle\":88,";
-    json += "\"panCmd\":92,";
+    // No telemetry data available - return null values to indicate no data
+    // Frontend will display "--" for missing values
+    json += "\"mode\":\"no_data\",";
+    json += "\"top\":null,";
+    json += "\"left\":null,";
+    json += "\"right\":null,";
+    json += "\"avg\":null,";
+    json += "\"horizontalError\":null,";
+    json += "\"verticalError\":null,";
+    json += "\"tiltAngle\":null,";
+    json += "\"panCmd\":null,";
     json += "\"steady\":false,";
     json += "\"manual\":false,";
-    json += "\"panTarget\":92,";
-    json += "\"panAngle\":92,";
-    json += "\"panSlider\":0,";
-    json += "\"minTilt\":50,";
+    json += "\"panTarget\":null,";
+    json += "\"panAngle\":null,";
+    json += "\"panSlider\":null,";
+    json += "\"minTilt\":50,";  // Keep limits as they're device config, not telemetry
     json += "\"maxTilt\":110,";
     json += "\"minPan\":50,";
     json += "\"maxPan\":130,";
-    json += "\"simTop\":2850,";
-    json += "\"simLeft\":2720,";
-    json += "\"simRight\":2790,";
-    json += "\"simHErr\":-70,";
-    json += "\"simVErr\":130,";
-    json += "\"simTilt\":89,";
-    json += "\"powerW\":6.20,";
-    json += "\"powerActualW\":6.05,";
-    json += "\"tempC\":38.7,";
-    json += "\"batteryPct\":82.4,";
-    json += "\"batteryV\":6.45,";
-    json += "\"efficiency\":89.3,";
-    json += "\"energyWh\":118.6,";
-    json += "\"energyKWh\":0.1186,";
-    json += "\"co2kg\":0.0474,";
-    json += "\"trees\":0.0022,";
-    json += "\"phones\":9.9,";
-    json += "\"phoneMinutes\":711,";
-    json += "\"pesos\":" + String(gridPriceRx * 0.1186f, 2) + ",";
-    json += "\"gridPrice\":" + String(gridPriceRx, 2) + ",";
+    json += "\"simTop\":null,";
+    json += "\"simLeft\":null,";
+    json += "\"simRight\":null,";
+    json += "\"simHErr\":null,";
+    json += "\"simVErr\":null,";
+    json += "\"simTilt\":null,";
+    json += "\"powerW\":null,";
+    json += "\"powerActualW\":null,";
+    json += "\"tempC\":null,";
+    json += "\"batteryPct\":null,";
+    json += "\"batteryV\":null,";
+    json += "\"efficiency\":null,";
+    json += "\"energyWh\":null,";
+    json += "\"energyKWh\":null,";
+    json += "\"co2kg\":null,";
+    json += "\"trees\":null,";
+    json += "\"phones\":null,";
+    json += "\"phoneMinutes\":null,";
+    json += "\"pesos\":null,";
+    json += "\"gridPrice\":" + String(gridPriceRx, 2) + ",";  // Keep grid price as it's stored locally
     json += "\"deviceName\":\"" + currentDevice + "\"";
   }
   json += "}";
