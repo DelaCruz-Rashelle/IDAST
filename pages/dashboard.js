@@ -1537,7 +1537,7 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
           display: flex;
           flex-direction: column;
           gap: 16px;
-          height: fit-content;
+          height: 100%;
           align-items: stretch;
         }
         .card {
@@ -1546,6 +1546,14 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
           border-radius: 14px;
           overflow: hidden;
           height: fit-content;
+        }
+        .right-column-container > .card {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+        }
+        .right-column-container > .card .content {
+          flex: 1;
         }
         .card h3 {
           margin: 0;
