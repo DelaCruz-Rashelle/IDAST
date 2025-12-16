@@ -69,12 +69,16 @@ export default async function handler(req, res) {
 
     // Handle different response types
     let data;
-    const contentType = response.headers.get('content-type');
+    const contentType = response.headers.get('content-type') || '';
     
-    if (contentType?.includes('application/json')) {
+    // Check if response is CSV (history endpoint) or text
+    const isCSV = endpoint.includes('/api/history') || contentType.includes('text/csv') || contentType.includes('text/plain');
+    const isJSON = contentType.includes('application/json');
+    
+    if (isJSON) {
       data = await response.json();
     } else {
-      // For text responses (like CSV history)
+      // For text/CSV responses (like CSV history)
       data = await response.text();
     }
     
@@ -83,13 +87,15 @@ export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     
-    // Preserve content type
-    if (contentType) {
+    // Preserve content type - ensure CSV gets proper content-type
+    if (isCSV && !contentType.includes('text/csv')) {
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    } else if (contentType) {
       res.setHeader('Content-Type', contentType);
     }
     
     // Return JSON for JSON responses, text for others
-    if (contentType?.includes('application/json')) {
+    if (isJSON) {
       return res.status(response.status).json(data);
     } else {
       return res.status(response.status).send(data);

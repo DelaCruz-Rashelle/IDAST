@@ -18,6 +18,7 @@ export default function Home() {
   const [currentDevice, setCurrentDevice] = useState("Unknown");
   const [sliderActive, setSliderActive] = useState({ tilt: false, pan: false });
   const [error, setError] = useState("");
+  const [historyError, setHistoryError] = useState("");
   const [deviceIP, setDeviceIP] = useState("");
   const [ipSaving, setIpSaving] = useState(false);
   const [ipConfigured, setIpConfigured] = useState(false);
@@ -292,24 +293,33 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
 
   // Load history
   const loadHistory = async () => {
+    setHistoryError(""); // Clear previous errors
+    let fetchUrl = ""; // Declare outside try for error logging
     try {
       // Prefer Railway DB-backed history if configured (keeps realtime via ESP32 tunnel unchanged)
       if (RAILWAY_API_BASE_URL) {
         const base = RAILWAY_API_BASE_URL.endsWith("/")
           ? RAILWAY_API_BASE_URL.slice(0, -1)
           : RAILWAY_API_BASE_URL;
-        const res = await fetch(`${base}/api/history.csv?days=60`);
+        fetchUrl = `${base}/api/history.csv?days=60`;
+        const res = await fetch(fetchUrl);
         if (res.ok) {
           const text = await res.text();
           setHistoryData(text);
           drawHistoryChart(text);
+        } else {
+          const errorText = await res.text();
+          setHistoryError(`Railway history fetch failed: ${res.status} ${res.statusText}`);
+          console.error("Railway history fetch failed:", res.status, errorText);
         }
         return;
       }
 
       const apiUrl = getApiUrl();
-      if (!apiUrl) return;
-      let fetchUrl;
+      if (!apiUrl) {
+        setHistoryError("API URL not configured");
+        return;
+      }
       
       // If using proxy mode, add endpoint as query parameter
       if (apiUrl.includes('/api/proxy')) {
@@ -327,14 +337,75 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
         fetchUrl = `${apiUrl}/api/history`;
       }
       
+      console.log("Fetching history from:", fetchUrl);
       const res = await fetch(fetchUrl);
-      if (res.ok) {
-        const text = await res.text();
-        setHistoryData(text);
-        drawHistoryChart(text);
+      
+      // Check response status
+      if (!res.ok) {
+        const errorText = await res.text();
+        setHistoryError(`History fetch failed: ${res.status} ${res.statusText}`);
+        console.error("History fetch failed:", res.status, errorText);
+        
+        // Check if response is error JSON
+        try {
+          const json = JSON.parse(errorText);
+          if (json.error) {
+            setHistoryError(`History error: ${json.error}`);
+          }
+        } catch (e) {
+          // Not JSON, use status text
+        }
+        return;
       }
+      
+      // Get response text
+      const text = await res.text();
+      const contentType = res.headers.get('content-type') || '';
+      
+      // Check if response is error JSON instead of CSV
+      if (contentType.includes('application/json')) {
+        try {
+          const json = JSON.parse(text);
+          if (json.error) {
+            setHistoryError(`History error: ${json.error}`);
+            console.error("History response is error JSON:", json);
+            return;
+          }
+        } catch (e) {
+          // Not JSON, continue processing as CSV
+        }
+      }
+      
+      // Validate CSV format - check if empty or header only
+      const trimmedText = text.trim();
+      const headerOnly = trimmedText === "timestamp,energy_wh,battery_pct,device_name,session_min";
+      
+      if (!trimmedText || headerOnly) {
+        // Empty or header only - this is expected initially, don't show error
+        setHistoryData(text);
+        console.log("History file is empty (no data logged yet)");
+        return;
+      }
+      
+      // Validate CSV has data rows
+      const lines = trimmedText.split("\n").filter(l => l.trim());
+      if (lines.length <= 1) {
+        // Only header, no data
+        setHistoryData(text);
+        console.log("History file has no data rows yet");
+        return;
+      }
+      
+      // Process valid CSV
+      console.log(`History loaded: ${lines.length - 1} data rows`);
+      setHistoryData(text);
+      drawHistoryChart(text);
+      
     } catch (e) {
+      const errorMsg = e.message || String(e);
+      setHistoryError(`Cannot fetch history: ${errorMsg}`);
       console.error("History fetch error:", e);
+      console.error("Failed URL:", fetchUrl);
     }
   };
 
@@ -1102,71 +1173,72 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
             </div>
           </div>
 
-          <div className="card">
-            <h3>Device Registration & Settings</h3>
-            <div className="content">
-              <div className="form-group">
-                <label htmlFor="deviceName">Device Name</label>
-                <input
-                  type="text"
-                  id="deviceName"
-                  value={deviceName}
-                  onFocus={() => { deviceNameInputFocusedRef.current = true; }}
-                  onBlur={() => {
-                    deviceNameInputFocusedRef.current = false;
-                  }}
-                  onChange={(e) => {
-                    setDeviceName(e.target.value);
-                  }}
-                  placeholder="Enter device name (e.g., iPhone 15)"
-                  maxLength={23}
-                />
-              </div>
-              <button
-                className="manual-btn"
-                style={{ width: "100%", marginTop: "8px", marginBottom: "16px" }}
-                onClick={async () => {
-                  if (deviceName.trim().length > 0) {
-                    try {
-                      await sendControl({ deviceName: deviceName.trim() });
-                      setCurrentDevice(deviceName.trim());
-                      alert("✅ Charging session started for: " + deviceName.trim());
-                    } catch (e) {
-                      console.error("Failed to start charging session:", e);
-                      alert("❌ Failed to start charging session. Please check your connection.");
+          <div className="right-column-container">
+            <div className="card">
+              <h3>Device Registration & Settings</h3>
+              <div className="content" style={{ padding: "12px 14px" }}>
+                <div className="form-group">
+                  <label htmlFor="deviceName">Device Name</label>
+                  <input
+                    type="text"
+                    id="deviceName"
+                    value={deviceName}
+                    onFocus={() => { deviceNameInputFocusedRef.current = true; }}
+                    onBlur={() => {
+                      deviceNameInputFocusedRef.current = false;
+                    }}
+                    onChange={(e) => {
+                      setDeviceName(e.target.value);
+                    }}
+                    placeholder="Enter device name (e.g., iPhone 15)"
+                    maxLength={23}
+                  />
+                </div>
+                <button
+                  className="manual-btn"
+                  style={{ width: "100%", marginTop: "6px", marginBottom: "12px" }}
+                  onClick={async () => {
+                    if (deviceName.trim().length > 0) {
+                      try {
+                        await sendControl({ deviceName: deviceName.trim() });
+                        setCurrentDevice(deviceName.trim());
+                        alert("✅ Charging session started for: " + deviceName.trim());
+                      } catch (e) {
+                        console.error("Failed to start charging session:", e);
+                        alert("❌ Failed to start charging session. Please check your connection.");
+                      }
+                    } else {
+                      alert("Please enter a device name first.");
                     }
-                  } else {
-                    alert("Please enter a device name first.");
-                  }
-                }}
-              >
-                Start Charging Session
-              </button>
-              <div style={{ marginBottom: "16px", fontSize: "13px", color: "var(--ink)" }}>
-                Current Device: <span className="mono" style={{ fontWeight: "600" }}>{currentDevice}</span>
-              </div>
-              <div className="form-group">
-                <label htmlFor="gridPrice">Batelec Grid Price (cents/kWh)</label>
-                <input
-                  type="number"
-                  id="gridPrice"
-                  value={gridPrice}
-                  onChange={(e) => {
-                    setGridPrice(e.target.value);
                   }}
-                  onBlur={handlePriceChange}
-                  placeholder="20.00"
-                  step="0.01"
-                  min="0"
-                  max="1000"
-                />
+                >
+                  Start Charging Session
+                </button>
+                <div style={{ marginBottom: "12px", fontSize: "13px", color: "var(--ink)" }}>
+                  Current Device: <span className="mono" style={{ fontWeight: "600" }}>{currentDevice}</span>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="gridPrice">Batelec Grid Price (cents/kWh)</label>
+                  <input
+                    type="number"
+                    id="gridPrice"
+                    value={gridPrice}
+                    onChange={(e) => {
+                      setGridPrice(e.target.value);
+                    }}
+                    onBlur={handlePriceChange}
+                    placeholder="20.00"
+                    step="0.01"
+                    min="0"
+                    max="1000"
+                  />
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="card">
-            <h3>Actual Sensors & Servo</h3>
-            <div className="content">
+            <div className="card">
+              <h3>Actual Sensors & Servo</h3>
+              <div className="content">
               <table className="table">
                 <thead>
                   <tr>
@@ -1203,10 +1275,25 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
               </div>
             </div>
           </div>
+          </div>
 
           <div className="card" style={{ gridColumn: "1/-1" }}>
             <h3>Monthly Report — Energy History</h3>
             <div className="content">
+              {historyError && (
+                <div style={{
+                  background: "rgba(255, 107, 107, 0.1)",
+                  border: "1px solid #ff6b6b",
+                  borderRadius: "8px",
+                  padding: "12px",
+                  marginBottom: "16px",
+                  color: "#ff6b6b",
+                  fontSize: "13px",
+                  lineHeight: "1.6"
+                }}>
+                  <strong>History Error:</strong> {historyError}
+                </div>
+              )}
               <div className="history-chart" style={{ position: "relative" }}>
                 <canvas ref={historyChartRef} width={800} height={300}></canvas>
                 {tooltip && (
@@ -1433,11 +1520,19 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
           grid-template-columns: 1.2fr 0.8fr;
           gap: 16px;
         }
+        .right-column-container {
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+          height: fit-content;
+          align-items: stretch;
+        }
         .card {
           background: linear-gradient(180deg, #101734, #0d142b);
           border: 1px solid var(--grid);
           border-radius: 14px;
           overflow: hidden;
+          height: fit-content;
         }
         .card h3 {
           margin: 0;
