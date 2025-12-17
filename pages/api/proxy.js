@@ -14,12 +14,12 @@ export default async function handler(req, res) {
   const esp32Url = `http://${esp32IP}${endpoint}`;
 
   try {
-    // Determine content type and body format
-    const contentType = req.headers['content-type'] || 'application/json';
+    // Determine request content type and body format
+    const requestContentType = req.headers['content-type'] || 'application/json';
     let requestBody = undefined;
     
     if (req.method !== 'GET' && req.body) {
-      if (contentType.includes('application/x-www-form-urlencoded')) {
+      if (requestContentType.includes('application/x-www-form-urlencoded')) {
         // For form-urlencoded, use URLSearchParams or string directly
         if (typeof req.body === 'string') {
           requestBody = req.body;
@@ -36,17 +36,17 @@ export default async function handler(req, res) {
     const response = await fetch(esp32Url, {
       method: req.method,
       headers: {
-        'Content-Type': contentType,
+        'Content-Type': requestContentType,
         ...req.headers,
       },
       body: requestBody,
     });
 
     // Handle different response types (JSON or CSV)
-    const contentType = response.headers.get('content-type') || '';
+    const responseContentType = response.headers.get('content-type') || '';
     let data;
     
-    if (contentType.includes('application/json')) {
+    if (responseContentType.includes('application/json')) {
       data = await response.json();
     } else {
       // For CSV or text responses (like /api/history endpoint)
@@ -59,12 +59,12 @@ export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     
     // Preserve content type
-    if (contentType) {
-      res.setHeader('Content-Type', contentType);
+    if (responseContentType) {
+      res.setHeader('Content-Type', responseContentType);
     }
     
     // Return appropriate format
-    if (contentType.includes('application/json')) {
+    if (responseContentType.includes('application/json')) {
       return res.status(response.status).json(data);
     } else {
       return res.status(response.status).send(data);
