@@ -1,4 +1,4 @@
-Arduino IDE: ino file
+Old
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -17,17 +17,16 @@ Arduino IDE: ino file
  *  • Host the LittleFS-based dashboard (index.html) + REST endpoints
  *
  * Update TRANSMITTER_MAC with the actual transmitter MAC before deployment.
- * WiFi credentials are configured via the web dashboard (not hardcoded).
+ * Update WIFI_SSID and WIFI_PASSWORD with your network credentials for tunneling.
  */
 
 // === WiFi / AP settings ===
 const char* AP_SSID     = "Solar_Capstone_Admin";
 const char* AP_PASSWORD = "12345678";
 
-// === WiFi Station settings (loaded from Preferences, not hardcoded) ===
-String wifiSSID = "";
-String wifiPassword = "";
-bool wifiConfigured = false;
+// === WiFi Station settings (for tunneling) ===
+const char* WIFI_SSID     = "ZTE_2.4G_gTUNE3";      // Replace with your WiFi network name
+const char* WIFI_PASSWORD = "simbasimba";  // Replace with your WiFi password
 
 // === ESP-NOW MAC placeholders ===
 const uint8_t WIFI_CHANNEL = 1;
@@ -110,7 +109,6 @@ void sendControlPacket(const ControlPacket &cmd);
 void seed_placeholder_history();
 void log_history_point(const TelemetryPacket &pkt);
 void initWiFiStation();
-void reconnectWiFi();
 
 void onDataSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
   (void)info;
@@ -134,23 +132,8 @@ void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, in
 }
 
 void initWiFiStation() {
-  // Load WiFi credentials from Preferences
-  settings.begin("solar_rx", true); // Read-only mode
-  wifiSSID = settings.getString("wifiSSID", "");
-  wifiPassword = settings.getString("wifiPassword", "");
-  settings.end();
-  
-  wifiConfigured = (wifiSSID.length() > 0);
-  
-  if (!wifiConfigured) {
-    Serial.println("\n📶 No WiFi credentials configured.");
-    Serial.println("   Device will operate in AP mode only.");
-    Serial.println("   Configure WiFi via the web dashboard.");
-    return;
-  }
-  
   Serial.println("\n📶 Connecting to WiFi network...");
-  Serial.printf("   SSID: %s\n", wifiSSID.c_str());
+  Serial.printf("   SSID: %s\n", WIFI_SSID);
   
   // Set WiFi mode explicitly before connecting
   WiFi.mode(WIFI_STA);
@@ -165,7 +148,7 @@ void initWiFiStation() {
   for (int i = 0; i < n; i++) {
     Serial.printf("   [%d] %s (RSSI: %d, Channel: %d)\n", 
                   i, WiFi.SSID(i).c_str(), WiFi.RSSI(i), WiFi.channel(i));
-    if (WiFi.SSID(i) == wifiSSID) {
+    if (WiFi.SSID(i) == WIFI_SSID) {
       foundSSID = true;
       Serial.printf("   ✅ Found target SSID on channel %d\n", WiFi.channel(i));
     }
@@ -176,10 +159,10 @@ void initWiFiStation() {
   }
   
   // Now try to connect
-  WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   
   int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 40) {  // 20 seconds timeout
+  while (WiFi.status() != WL_CONNECTED && attempts < 40) {  // Increased to 20 seconds
     delay(500);
     Serial.print(".");
     attempts++;
@@ -203,30 +186,22 @@ void initWiFiStation() {
     Serial.printf("❌ WiFi Station connection failed! Status code: %d\n", WiFi.status());
     Serial.println("   Device will continue in AP mode only");
     Serial.printf("   AP IP: %s\n", WiFi.softAPIP().toString().c_str());
-    Serial.println("   You can reconfigure WiFi via the web dashboard.");
   }
-}
-
-void reconnectWiFi() {
-  Serial.println("\n🔄 Reconnecting to WiFi with new credentials...");
-  WiFi.disconnect();
-  delay(500);
-  initWiFiStation();
 }
 
 void initEspNow() {
   WiFi.mode(WIFI_AP_STA);
   
-  // Set up Access Point first (always available)
+  // Connect to WiFi network first
+  initWiFiStation();
+  
+  // Then set up Access Point (fallback)
   WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
   Serial.printf("📡 Receiver AP MAC: %s | STA MAC: %s | channel: %u\n",
                 WiFi.softAPmacAddress().c_str(),
                 WiFi.macAddress().c_str(),
                 WIFI_CHANNEL);
-  
-  // Then try to connect to WiFi Station (if configured)
-  initWiFiStation();
-  
+
   if (esp_now_init() != ESP_OK) {
     Serial.println("❌ ESP-NOW init failed");
     return;
@@ -290,11 +265,6 @@ void log_history_point(const TelemetryPacket &pkt) {
 }
 
 void seed_placeholder_history() {
-  // NOTE: Placeholder history seeding is DISABLED by default to avoid confusion
-  // Uncomment the code below if you want demo/placeholder data for testing
-  // For production, leave this function empty to start with real data only
-  
-  /*
   File test = LittleFS.open("/history.csv", "r");
   bool needsSeed = true;
   if (test) {
@@ -328,10 +298,6 @@ void seed_placeholder_history() {
   }
   file.close();
   Serial.println("✅ Seeded placeholder history");
-  */
-  
-  // Start with empty history - real data will be logged as telemetry arrives
-  Serial.println("ℹ️ History seeding disabled - starting with empty history");
 }
 
 void handle_root() {
@@ -385,66 +351,47 @@ void sendTelemetryJson() {
     json += "\"phoneMinutes\":" + String(latestTelemetry.phoneMinutes, 0) + ",";
     json += "\"pesos\":" + String(latestTelemetry.pesos, 2) + ",";
     json += "\"gridPrice\":" + String(latestTelemetry.gridPrice, 2) + ",";
-    json += "\"wifiSSID\":\"" + wifiSSID + "\",";
-    json += "\"wifiConfigured\":" + String(wifiConfigured ? "true" : "false") + ",";
-    if (WiFi.status() == WL_CONNECTED) {
-      json += "\"staIP\":\"" + WiFi.localIP().toString() + "\",";
-      json += "\"wifiConnected\":true,";
-    } else {
-      json += "\"staIP\":\"\",";
-      json += "\"wifiConnected\":false,";
-    }
     json += "\"deviceName\":\"" + currentDevice + "\"";
   } else {
-    // No telemetry data available - return null values to indicate no data
-    // Frontend will display "--" for missing values
-    json += "\"mode\":\"no_data\",";
-    json += "\"top\":null,";
-    json += "\"left\":null,";
-    json += "\"right\":null,";
-    json += "\"avg\":null,";
-    json += "\"horizontalError\":null,";
-    json += "\"verticalError\":null,";
-    json += "\"tiltAngle\":null,";
-    json += "\"panCmd\":null,";
+    // If we don't yet have live telemetry, expose a stable-looking baseline snapshot
+    json += "\"mode\":\"live\",";
+    json += "\"top\":2800,";
+    json += "\"left\":2750,";
+    json += "\"right\":2780,";
+    json += "\"avg\":2775,";
+    json += "\"horizontalError\":-30,";
+    json += "\"verticalError\":120,";
+    json += "\"tiltAngle\":88,";
+    json += "\"panCmd\":92,";
     json += "\"steady\":false,";
     json += "\"manual\":false,";
-    json += "\"panTarget\":null,";
-    json += "\"panAngle\":null,";
-    json += "\"panSlider\":null,";
-    json += "\"minTilt\":50,";  // Keep limits as they're device config, not telemetry
+    json += "\"panTarget\":92,";
+    json += "\"panAngle\":92,";
+    json += "\"panSlider\":0,";
+    json += "\"minTilt\":50,";
     json += "\"maxTilt\":110,";
     json += "\"minPan\":50,";
     json += "\"maxPan\":130,";
-    json += "\"simTop\":null,";
-    json += "\"simLeft\":null,";
-    json += "\"simRight\":null,";
-    json += "\"simHErr\":null,";
-    json += "\"simVErr\":null,";
-    json += "\"simTilt\":null,";
-    json += "\"powerW\":null,";
-    json += "\"powerActualW\":null,";
-    json += "\"tempC\":null,";
-    json += "\"batteryPct\":null,";
-    json += "\"batteryV\":null,";
-    json += "\"efficiency\":null,";
-    json += "\"energyWh\":null,";
-    json += "\"energyKWh\":null,";
-    json += "\"co2kg\":null,";
-    json += "\"trees\":null,";
-    json += "\"phones\":null,";
-    json += "\"phoneMinutes\":null,";
-    json += "\"pesos\":null,";
-    json += "\"gridPrice\":" + String(gridPriceRx, 2) + ",";  // Keep grid price as it's stored locally
-    json += "\"wifiSSID\":\"" + wifiSSID + "\",";
-    json += "\"wifiConfigured\":" + String(wifiConfigured ? "true" : "false") + ",";
-    if (WiFi.status() == WL_CONNECTED) {
-      json += "\"staIP\":\"" + WiFi.localIP().toString() + "\",";
-      json += "\"wifiConnected\":true,";
-    } else {
-      json += "\"staIP\":\"\",";
-      json += "\"wifiConnected\":false,";
-    }
+    json += "\"simTop\":2850,";
+    json += "\"simLeft\":2720,";
+    json += "\"simRight\":2790,";
+    json += "\"simHErr\":-70,";
+    json += "\"simVErr\":130,";
+    json += "\"simTilt\":89,";
+    json += "\"powerW\":6.20,";
+    json += "\"powerActualW\":6.05,";
+    json += "\"tempC\":38.7,";
+    json += "\"batteryPct\":82.4,";
+    json += "\"batteryV\":6.45,";
+    json += "\"efficiency\":89.3,";
+    json += "\"energyWh\":118.6,";
+    json += "\"energyKWh\":0.1186,";
+    json += "\"co2kg\":0.0474,";
+    json += "\"trees\":0.0022,";
+    json += "\"phones\":9.9,";
+    json += "\"phoneMinutes\":711,";
+    json += "\"pesos\":" + String(gridPriceRx * 0.1186f, 2) + ",";
+    json += "\"gridPrice\":" + String(gridPriceRx, 2) + ",";
     json += "\"deviceName\":\"" + currentDevice + "\"";
   }
   json += "}";
@@ -481,9 +428,7 @@ void handle_control() {
       cmd.gridPrice = newPrice;
       gridPriceRx = newPrice;
       latestTelemetry.gridPrice = newPrice;
-      settings.begin("solar_rx", false);
       settings.putFloat("gridPrice", newPrice);
-      settings.end();
     }
   }
 
@@ -500,62 +445,6 @@ void handle_control() {
   }
 
   server.send(200, "application/json", "{\"ok\":true}");
-}
-
-void handle_wifi_config() {
-  // Handle WiFi configuration endpoint
-  if (server.method() != HTTP_POST) {
-    server.send(405, "application/json", "{\"error\":\"Method not allowed\"}");
-    return;
-  }
-
-  String newSSID = "";
-  String newPassword = "";
-  
-  if (server.hasArg("wifiSSID")) {
-    newSSID = server.arg("wifiSSID");
-    newSSID.trim();
-  }
-  
-  if (server.hasArg("wifiPassword")) {
-    newPassword = server.arg("wifiPassword");
-  }
-
-  // Validate input
-  if (newSSID.length() == 0) {
-    server.send(400, "application/json", "{\"error\":\"WiFi SSID cannot be empty\"}");
-    return;
-  }
-
-  if (newSSID.length() > 32) {
-    server.send(400, "application/json", "{\"error\":\"WiFi SSID too long (max 32 characters)\"}");
-    return;
-  }
-
-  if (newPassword.length() > 64) {
-    server.send(400, "application/json", "{\"error\":\"WiFi password too long (max 64 characters)\"}");
-    return;
-  }
-
-  // Save to Preferences
-  settings.begin("solar_rx", false);
-  settings.putString("wifiSSID", newSSID);
-  settings.putString("wifiPassword", newPassword);
-  settings.end();
-
-  // Update global variables
-  wifiSSID = newSSID;
-  wifiPassword = newPassword;
-  wifiConfigured = true;
-
-  Serial.println("\n✅ WiFi credentials saved:");
-  Serial.printf("   SSID: %s\n", wifiSSID.c_str());
-  Serial.println("   Password: [hidden]");
-
-  // Reconnect WiFi with new credentials
-  reconnectWiFi();
-
-  server.send(200, "application/json", "{\"ok\":true,\"message\":\"WiFi credentials saved. Reconnecting...\"}");
 }
 
 void handle_history() {
@@ -579,8 +468,6 @@ void sendControlPacket(const ControlPacket &cmd) {
 void loadSettings() {
   settings.begin("solar_rx", false);
   gridPriceRx = settings.getFloat("gridPrice", 12.0f);
-  // WiFi credentials are loaded separately in initWiFiStation()
-  settings.end();
 }
 
 void setup() {
@@ -592,7 +479,6 @@ void setup() {
   server.on("/", handle_root);
   server.on("/data", handle_data);
   server.on("/control", HTTP_POST, handle_control);
-  server.on("/wifi-config", HTTP_POST, handle_wifi_config);
   server.on("/api/history", handle_history);
   server.begin();
   Serial.println("✅ Receiver web server started");
@@ -608,7 +494,6 @@ void setup() {
     Serial.println("\n📡 Access Point Mode:");
     Serial.print("   http://");
     Serial.println(WiFi.softAPIP());
-    Serial.println("   Configure WiFi via: http://" + WiFi.softAPIP().toString() + "/");
   }
 }
 

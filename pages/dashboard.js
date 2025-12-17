@@ -85,9 +85,11 @@ export default function Home() {
     }
     
     // If we have ESP32 IP and want to use proxy mode (no manual tunnel needed)
-    if (useProxyMode && staIP && staIP !== "Not connected") {
+    // This works when ESP32 is on the same network or has public IP
+    if (useProxyMode && staIP && staIP !== "Not connected" && staIP.length > 0) {
       // Use Next.js API route as proxy - ESP32 must be accessible from internet
       // This works if ESP32 has public IP or is behind a router with port forwarding
+      // Note: For remote access, tunnel is still needed, but for same-network access this works
       return `/api/proxy?ip=${staIP}`;
     }
     
@@ -144,8 +146,26 @@ export default function Home() {
         if (json.wifiSSID !== undefined && !wifiInputFocusedRef.current) {
           setWifiSSID(json.wifiSSID || "");
         }
+        if (json.wifiConfigured !== undefined) {
+          // wifiConfigured status is used in the WiFi config UI
+        }
+        // Auto-detect WiFi connection and switch from AP mode
         if (json.staIP !== undefined) {
-          setStaIP(json.staIP || "");
+          const newStaIP = json.staIP || "";
+          setStaIP(newStaIP);
+          
+          // If ESP32 is now connected to WiFi and we're in AP mode, automatically switch
+          if (newStaIP && newStaIP !== "Not connected" && json.wifiConnected && useAPMode) {
+            // ESP32 has connected to WiFi - automatically switch to use WiFi IP
+            // Use proxy mode if ESP32 IP is available
+            if (newStaIP.length > 0) {
+              setUseProxyMode(true);
+              setUseAPMode(false);
+              // Clear any errors since we're switching modes
+              setError("");
+              console.log("✅ Auto-switched from AP mode to WiFi connection:", newStaIP);
+            }
+          }
         }
         if (!sliderActive.tilt && json.tiltAngle !== undefined) {
           setTiltValue(json.tiltAngle);
@@ -262,6 +282,109 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
     });
     if (!res.ok) throw new Error("Control command failed");
     return res;
+  };
+
+  // Send WiFi configuration
+  const sendWifiConfig = async (ssid, password) => {
+    const apiUrl = getApiUrl();
+    if (!apiUrl) {
+      throw new Error("API URL not configured");
+    }
+    const params = new URLSearchParams({
+      wifiSSID: ssid,
+      wifiPassword: password || ""
+    });
+    
+    // Determine the correct endpoint URL
+    let fetchUrl;
+    if (apiUrl.includes('/api/proxy')) {
+      const urlObj = new URL(apiUrl, window.location.origin);
+      urlObj.searchParams.set('endpoint', '/wifi-config');
+      fetchUrl = urlObj.pathname + urlObj.search;
+    } else if (apiUrl.includes('/api/tunnel-proxy')) {
+      const urlObj = new URL(apiUrl, window.location.origin);
+      urlObj.searchParams.set('endpoint', '/wifi-config');
+      fetchUrl = urlObj.pathname + urlObj.search;
+    } else {
+      fetchUrl = `${apiUrl}/wifi-config`;
+    }
+    
+    const res = await fetch(fetchUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: params.toString()
+    });
+    
+    if (!res.ok) {
+      const errorText = await res.text();
+      let errorMsg = "WiFi configuration failed";
+      try {
+        const errorJson = JSON.parse(errorText);
+        if (errorJson.error) {
+          errorMsg = errorJson.error;
+        }
+      } catch (e) {
+        // Not JSON, use text as-is
+        if (errorText) errorMsg = errorText;
+      }
+      throw new Error(errorMsg);
+    }
+    return res;
+  };
+
+  // Handle WiFi configuration save
+  const handleSaveWifi = async () => {
+    const ssid = wifiEditMode ? wifiEditSSID : wifiSSID;
+    const password = wifiEditMode ? wifiEditPassword : wifiPassword;
+    
+    if (!ssid || ssid.trim().length === 0) {
+      alert("Please enter a WiFi SSID (network name)");
+      return;
+    }
+    
+    if (ssid.length > 32) {
+      alert("WiFi SSID is too long (maximum 32 characters)");
+      return;
+    }
+    
+    if (password.length > 64) {
+      alert("WiFi password is too long (maximum 64 characters)");
+      return;
+    }
+    
+    setWifiSaving(true);
+    try {
+      await sendWifiConfig(ssid.trim(), password);
+      setWifiSSID(ssid.trim());
+      setWifiPassword(password);
+      setWifiEditMode(false);
+      setWifiEditSSID("");
+      setWifiEditPassword("");
+      alert("✅ WiFi credentials saved! ESP32 will reconnect to the new network. This may take 10-30 seconds. The app will automatically switch to WiFi connection once ESP32 connects.");
+      // Start polling more frequently to detect WiFi connection
+      let pollCount = 0;
+      const maxPolls = 30; // Poll for up to 30 seconds
+      const pollInterval = setInterval(() => {
+        pollCount++;
+        fetchData();
+        // Stop polling if we've detected WiFi connection or max polls reached
+        if (staIP && staIP !== "Not connected" && staIP.length > 0) {
+          clearInterval(pollInterval);
+        } else if (pollCount >= maxPolls) {
+          clearInterval(pollInterval);
+        }
+      }, 1000);
+      
+      // Also refresh data immediately
+      setTimeout(() => {
+        fetchData();
+      }, 2000);
+    } catch (e) {
+      console.error("WiFi config error:", e);
+      alert(`❌ Failed to save WiFi credentials: ${e.message}`);
+    } finally {
+      setWifiSaving(false);
+    }
   };
 
   // Draw sensor graph
@@ -532,6 +655,17 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
   useEffect(() => {
     // Only start fetching if authenticated
     if (typeof window !== "undefined" && sessionStorage.getItem("isAuthenticated")) {
+      // Auto-detect: If no API URL configured and no tunnel URL, suggest AP mode
+      if (!API_BASE_URL && !customTunnelURL && !useAPMode) {
+        // Check if we can detect AP mode (user might be connected to ESP32 AP)
+        // This is a best-effort detection - user can still manually switch
+        const hostname = window.location.hostname;
+        // If accessing from localhost or IP that might be ESP32 AP, suggest AP mode
+        if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.4.')) {
+          setUseAPMode(true);
+        }
+      }
+      
       fetchData();
       loadHistory();
       const dataInterval = setInterval(fetchData, 350);
@@ -954,20 +1088,25 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
               </div>
             )}
             {useAPMode && (
-              <div style={{ marginTop: "12px" }}>
+              <div style={{ marginTop: "12px", padding: "12px", background: "rgba(47, 210, 122, 0.1)", border: "1px solid rgba(47, 210, 122, 0.3)", borderRadius: "8px" }}>
+                <div style={{ fontSize: "12px", marginBottom: "10px", color: "var(--ink)" }}>
+                  <strong>✅ AP Mode Active:</strong> You're connected to ESP32's Access Point. Configure WiFi below, then switch to Tunnel Mode for remote access.
+                </div>
+                <div style={{ marginTop: "8px", fontSize: "11px", color: "var(--muted)", lineHeight: "1.6" }}>
+                  <strong>Current Connection:</strong> ESP32 WiFi (<strong>Solar_Capstone_Admin</strong>)
+                  <br />
+                  <strong>Next Step:</strong> Configure WiFi credentials in the "WiFi Configuration" section below
+                </div>
                 <button
                   className="manual-btn alt"
                   onClick={() => {
                     setUseAPMode(false);
                     setError("");
                   }}
-                  style={{ marginTop: "8px" }}
+                  style={{ marginTop: "10px", fontSize: "13px", padding: "10px 16px", width: "100%" }}
                 >
-                  Switch to Tunnel Mode
+                  Switch to Tunnel Mode (After WiFi is Configured)
                 </button>
-                <div style={{ marginTop: "8px", fontSize: "12px", color: "var(--muted)" }}>
-                  Make sure you're connected to ESP32's WiFi: <strong>Solar_Capstone_Admin</strong> (password: 12345678)
-                </div>
               </div>
             )}
             {!useAPMode && API_BASE_URL && (
@@ -1245,6 +1384,136 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
                     min="0"
                     max="1000"
                   />
+                </div>
+                
+                <div style={{ marginTop: "20px", paddingTop: "20px", borderTop: "1px solid var(--grid)" }}>
+                  <h4 style={{ marginBottom: "12px", fontSize: "14px", fontWeight: "600", color: "var(--ink)" }}>
+                    WiFi Configuration
+                    {useAPMode && (
+                      <span style={{ marginLeft: "8px", fontSize: "11px", padding: "2px 6px", background: "rgba(47, 210, 122, 0.2)", borderRadius: "4px", color: "var(--accent)" }}>
+                        Configure Here
+                      </span>
+                    )}
+                  </h4>
+                  {wifiEditMode ? (
+                    <>
+                      <div className="form-group">
+                        <label htmlFor="wifiSSID">WiFi Network Name (SSID)</label>
+                        <input
+                          type="text"
+                          id="wifiSSID"
+                          value={wifiEditSSID}
+                          onChange={(e) => {
+                            setWifiEditSSID(e.target.value);
+                          }}
+                          onFocus={() => {
+                            wifiInputFocusedRef.current = true;
+                          }}
+                          onBlur={() => {
+                            wifiInputFocusedRef.current = false;
+                          }}
+                          placeholder="Enter WiFi network name"
+                          maxLength={32}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label htmlFor="wifiPassword">WiFi Password</label>
+                        <input
+                          type="password"
+                          id="wifiPassword"
+                          value={wifiEditPassword}
+                          onChange={(e) => {
+                            setWifiEditPassword(e.target.value);
+                          }}
+                          onFocus={() => {
+                            wifiInputFocusedRef.current = true;
+                          }}
+                          onBlur={() => {
+                            wifiInputFocusedRef.current = false;
+                          }}
+                          placeholder="Enter WiFi password (optional for open networks)"
+                          maxLength={64}
+                        />
+                      </div>
+                      <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+                        <button
+                          className="manual-btn"
+                          style={{ flex: 1 }}
+                          onClick={handleSaveWifi}
+                          disabled={wifiSaving}
+                        >
+                          {wifiSaving ? "Saving..." : "Save WiFi"}
+                        </button>
+                        <button
+                          className="manual-btn alt"
+                          onClick={() => {
+                            setWifiEditMode(false);
+                            setWifiEditSSID("");
+                            setWifiEditPassword("");
+                          }}
+                          disabled={wifiSaving}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div style={{ marginBottom: "12px", fontSize: "13px", color: "var(--muted)" }}>
+                        {wifiSSID ? (
+                          <>
+                            <div style={{ marginBottom: "4px" }}>
+                              <strong>Current Network:</strong> <span className="mono">{wifiSSID}</span>
+                            </div>
+                            <div style={{ fontSize: "12px", color: data?.wifiConfigured ? "var(--accent)" : "var(--warn)" }}>
+                              {data?.wifiConfigured ? "✅ Configured" : "⚠️ Not connected"}
+                            </div>
+                          </>
+                        ) : (
+                          <div style={{ color: "var(--warn)" }}>
+                            ⚠️ No WiFi configured. ESP32 is in AP mode only.
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        className="manual-btn"
+                        style={{ width: "100%" }}
+                        onClick={() => {
+                          setWifiEditMode(true);
+                          setWifiEditSSID(wifiSSID);
+                          setWifiEditPassword(wifiPassword);
+                        }}
+                      >
+                        {wifiSSID ? "Change WiFi Settings" : "Configure WiFi"}
+                      </button>
+                      {!wifiSSID && (
+                        <div style={{ marginTop: "8px", padding: "10px", background: "rgba(47, 210, 122, 0.1)", border: "1px solid rgba(47, 210, 122, 0.3)", borderRadius: "6px", fontSize: "11px", color: "var(--ink)", lineHeight: "1.6" }}>
+                          <strong>📡 Initial Setup:</strong>
+                          <ol style={{ margin: "6px 0 0 0", paddingLeft: "18px" }}>
+                            <li>Connect your device to ESP32's WiFi: <strong>Solar_Capstone_Admin</strong> (password: 12345678)</li>
+                            <li>Open this deployed app (you're already here!)</li>
+                            <li>Click "Configure WiFi" above and enter your router's WiFi credentials</li>
+                            <li>After saving, ESP32 will connect to your router automatically</li>
+                            <li>Then set up Cloudflare tunnel for remote access</li>
+                          </ol>
+                        </div>
+                      )}
+                      {useAPMode && wifiSSID && (
+                        <div style={{ marginTop: "8px", padding: "10px", background: "rgba(47, 210, 122, 0.1)", border: "1px solid rgba(47, 210, 122, 0.3)", borderRadius: "6px", fontSize: "11px", color: "var(--accent)", lineHeight: "1.6" }}>
+                          <strong>🔄 Auto-Switch Enabled:</strong> Once ESP32 connects to WiFi, the app will automatically switch to WiFi connection. No manual steps needed!
+                        </div>
+                      )}
+                      {!useAPMode && staIP && staIP !== "Not connected" && (
+                        <div style={{ marginTop: "8px", padding: "10px", background: "rgba(47, 210, 122, 0.1)", border: "1px solid rgba(47, 210, 122, 0.3)", borderRadius: "6px", fontSize: "11px", color: "var(--accent)", lineHeight: "1.6" }}>
+                          <strong>✅ Connected via WiFi:</strong> ESP32 IP: <span className="mono">{staIP}</span>
+                          <br />
+                          <span style={{ fontSize: "10px", color: "var(--muted)" }}>
+                            Note: For remote access from outside your network, Cloudflare tunnel setup is still needed.
+                          </span>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               </div>
             </div>
