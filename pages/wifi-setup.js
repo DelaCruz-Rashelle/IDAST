@@ -27,45 +27,23 @@ export default function WiFiSetup() {
     }
   }, [router]);
 
-  // Get the API URL (use AP mode for WiFi setup)
+  // Always use AP mode for WiFi configuration (ESP32's Access Point)
   const getApiUrl = () => {
-    if (useAPMode) {
-      return `http://${apIP}`;
-    }
-    
-    // If we have ESP32 IP and want to use proxy mode
-    if (staIP && staIP !== "Not connected" && staIP.length > 0) {
-      return `/api/proxy?ip=${staIP}`;
-    }
-    
-    // Use custom tunnel URL from localStorage if available
-    const customTunnelURL = typeof window !== "undefined" ? localStorage.getItem("customTunnelURL") : null;
-    if (customTunnelURL && customTunnelURL.length > 0) {
-      return `/api/tunnel-proxy?endpoint=`;
-    }
-    
-    // If API_BASE_URL is set (from env), use proxy
-    if (API_BASE_URL && API_BASE_URL.length > 0) {
-      return `/api/tunnel-proxy?endpoint=`;
-    }
-    
-    return "";
+    return `http://${apIP}`;
   };
 
-  // Check WiFi status from ESP32
+  // Check WiFi status from ESP32 (automatically tries AP mode)
   const checkWiFiStatus = async () => {
-    const apiUrl = getApiUrl();
-    if (!apiUrl) {
-      setStatus("⚠️ Connect to ESP32's Access Point (Solar_Capstone_Admin) to configure WiFi");
-      return;
-    }
-
+    // Always try AP mode for WiFi configuration
+    const apIP = "192.168.4.1";
+    setStatus("🔄 Connecting to ESP32...");
+    
     try {
-      const fetchUrl = apiUrl.includes('/api/') 
-        ? `${apiUrl}/data` 
-        : `${apiUrl}/data`;
+      const res = await fetch(`http://${apIP}/data`, {
+        method: "GET",
+        signal: AbortSignal.timeout(5000) // 5 second timeout
+      });
       
-      const res = await fetch(fetchUrl);
       if (res.ok) {
         const json = await res.json();
         if (json.wifiSSID !== undefined && !wifiInputFocusedRef.current) {
@@ -85,43 +63,33 @@ export default function WiFiSetup() {
               router.push("/dashboard");
             }, 2000);
           } else if (json.wifiSSID && json.wifiSSID.length > 0) {
-            setStatus("⚠️ WiFi is configured but not connected. You can update the credentials below.");
+            setStatus("✅ Connected to ESP32. WiFi is configured but not connected. You can update the credentials below.");
           } else {
-            setStatus("📡 WiFi not configured. Please enter your WiFi credentials below.");
+            setStatus("✅ Ready! Enter your router's WiFi credentials below.");
           }
+        } else {
+          setStatus("✅ Ready! Enter your router's WiFi credentials below.");
         }
       } else {
-        setStatus("⚠️ Cannot connect to ESP32. Make sure you're connected to ESP32's Access Point.");
+        setStatus("⚠️ Cannot connect to ESP32. Please ensure ESP32 is powered on and your device is connected to ESP32's WiFi network (Solar_Capstone_Admin).");
       }
     } catch (e) {
-      setStatus("⚠️ Cannot connect to ESP32. Make sure you're connected to ESP32's Access Point (Solar_Capstone_Admin).");
+      setStatus("⚠️ Cannot connect to ESP32. Please connect your device to ESP32's WiFi network:\nNetwork: Solar_Capstone_Admin\nPassword: 12345678\n\nThen refresh this page.");
     }
   };
 
-  // Send WiFi configuration
+  // Send WiFi configuration (always uses AP mode)
   const sendWifiConfig = async (ssid, password) => {
-    const apiUrl = getApiUrl();
-    if (!apiUrl) {
-      throw new Error("Cannot connect to ESP32. Please connect to ESP32's Access Point first.");
-    }
+    // Always use AP mode for WiFi configuration
+    const apIP = "192.168.4.1";
+    const apiUrl = `http://${apIP}`;
     const params = new URLSearchParams({
       wifiSSID: ssid,
       wifiPassword: password || ""
     });
     
-    // Determine the correct endpoint URL
-    let fetchUrl;
-    if (apiUrl.includes('/api/proxy')) {
-      const urlObj = new URL(apiUrl, window.location.origin);
-      urlObj.searchParams.set('endpoint', '/wifi-config');
-      fetchUrl = urlObj.pathname + urlObj.search;
-    } else if (apiUrl.includes('/api/tunnel-proxy')) {
-      const urlObj = new URL(apiUrl, window.location.origin);
-      urlObj.searchParams.set('endpoint', '/wifi-config');
-      fetchUrl = urlObj.pathname + urlObj.search;
-    } else {
-      fetchUrl = `${apiUrl}/wifi-config`;
-    }
+    // Direct connection to ESP32 AP
+    const fetchUrl = `${apiUrl}/wifi-config`;
     
     const res = await fetch(fetchUrl, {
       method: "POST",
@@ -225,9 +193,9 @@ export default function WiFiSetup() {
           <div className="login-header">
             <div className="sun"></div>
             <div className="login-title">WiFi Configuration</div>
-            <div className="login-subtitle">ESP32 Network Setup</div>
+            <div className="login-subtitle">Enter Your Router's WiFi Credentials</div>
             <div className="login-subtitle" style={{ marginTop: "4px", fontSize: "12px", opacity: 0.7 }}>
-              Step 2 of 2
+              The app will automatically configure ESP32
             </div>
           </div>
 
@@ -261,23 +229,28 @@ export default function WiFiSetup() {
             </div>
           )}
 
-          {useAPMode && !staIP && (
+          {status && status.includes("⚠️") && (
             <div style={{
-              background: "rgba(47, 210, 122, 0.1)",
-              border: "1px solid rgba(47, 210, 122, 0.3)",
+              background: "rgba(245, 179, 66, 0.1)",
+              border: "1px solid rgba(245, 179, 66, 0.3)",
               borderRadius: "8px",
               padding: "12px",
               marginBottom: "20px",
               fontSize: "12px",
-              color: "var(--ink)",
-              lineHeight: "1.6"
+              color: "var(--warn)",
+              lineHeight: "1.6",
+              whiteSpace: "pre-line"
             }}>
-              <strong>📡 Initial Setup:</strong>
-              <ol style={{ margin: "8px 0 0 0", paddingLeft: "18px" }}>
-                <li>Connect your device to ESP32's WiFi: <strong>Solar_Capstone_Admin</strong> (password: 12345678)</li>
-                <li>Once connected, enter your router's WiFi credentials below</li>
-                <li>After saving, ESP32 will connect to your router automatically</li>
-              </ol>
+              <strong>📡 Quick Setup:</strong>
+              <br />
+              Connect your device to ESP32's WiFi network:
+              <br />
+              <strong>Network:</strong> Solar_Capstone_Admin
+              <br />
+              <strong>Password:</strong> 12345678
+              <br />
+              <br />
+              Once connected, this page will automatically detect ESP32 and you can enter your router's WiFi credentials below.
             </div>
           )}
 
@@ -315,14 +288,14 @@ export default function WiFiSetup() {
             <button
               type="submit"
               className="login-btn"
-              disabled={wifiSaving}
+              disabled={wifiSaving || status.includes("⚠️")}
             >
-              {wifiSaving ? "Saving..." : "Save WiFi Configuration"}
+              {wifiSaving ? "Saving WiFi Configuration..." : status.includes("⚠️") ? "Connect to ESP32 First" : "Save WiFi Configuration"}
             </button>
           </form>
 
           <div className="login-footer">
-            <span className="muted">Configure ESP32 to connect to your WiFi network</span>
+            <span className="muted">Enter your router's WiFi credentials. The app will automatically configure ESP32.</span>
           </div>
         </div>
       </div>
