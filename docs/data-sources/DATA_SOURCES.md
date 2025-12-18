@@ -128,41 +128,50 @@ kWh
 
 ## Realtime Tracker Telemetry
 
-Real-time telemetry data is fetched from the ESP32 device and displayed in the dashboard.
+Real-time telemetry data is received via MQTT WebSocket subscription and displayed in the dashboard.
 
 ### Location: `pages/dashboard.js`
 
-### Data Fetching Function
+### MQTT Subscription
 
-**Function:** `fetchData()`  
-**Location:** Lines 107-241
+**Function:** MQTT client subscription via `useEffect` hook  
+**Location:** Lines ~50-150 (MQTT connection setup)
 
 ```javascript
-const fetchData = async () => {
-  const apiUrl = getApiUrl();
-  if (!apiUrl) {
-    setError("API URL not configured...");
+useEffect(() => {
+  if (!MQTT_BROKER_URL) {
+    setError("MQTT broker URL not configured");
     return;
   }
-  try {
-    const fetchUrl = apiUrl.includes('/api/') 
-      ? `${apiUrl}/data` 
-      : `${apiUrl}/data`;
-    
-    const res = await fetch(fetchUrl);
-    if (res.ok) {
-      const json = await res.json();
-      setData(json);
-      // ... update state variables
-    }
-  } catch (e) {
-    // ... error handling
-  }
-};
+
+  const client = mqtt.connect(MQTT_BROKER_URL, {
+    username: MQTT_USERNAME,
+    password: MQTT_PASSWORD,
+  });
+
+  client.on("connect", () => {
+    console.log("✅ MQTT connected");
+    client.subscribe("solar-tracker/+/telemetry");
+    client.subscribe("solar-tracker/+/status");
+  });
+
+  client.on("message", (topic, message) => {
+    const json = JSON.parse(message.toString());
+    setData(json);
+    // ... update state variables
+  });
+
+  return () => {
+    client.end();
+  };
+}, []);
 ```
 
-**API Endpoint:** `/data` (GET request)  
-**Response Format:** JSON
+**MQTT Topics:**
+- `solar-tracker/+/telemetry` - Real-time telemetry data (QoS 1)
+- `solar-tracker/+/status` - Device status updates (QoS 1)
+
+**Message Format:** JSON
 
 ### Display Location: Lines 907-1002
 
@@ -181,16 +190,19 @@ The telemetry data is displayed in the "Realtime Tracker Telemetry" card section
 
 ### Backend Data Source
 
-**ESP32 Code Location:** `arduino.md` (lines 313-398)
+**ESP32 Code Location:** `docs/arduino/arduino_receiver.md`
 
-The ESP32's `sendTelemetryJson()` function constructs the JSON response with all telemetry fields:
-- Sensor readings (top, left, right, avg)
-- Tracking data (tiltAngle, panAngle, errors)
-- Power and energy metrics
-- Battery status
-- Device information
+The ESP32 receiver:
+1. Receives telemetry via ESP-NOW from the transmitter ESP32
+2. Publishes telemetry to MQTT topic: `solar-tracker/{device_id}/telemetry`
+3. Message includes all telemetry fields:
+   - Sensor readings (top, left, right, avg)
+   - Tracking data (tiltAngle, panAngle, errors)
+   - Power and energy metrics
+   - Battery status
+   - Device information
 
-**API Route Handler:** `handle_data()` function in ESP32 code (line 401-403)
+**MQTT Publishing:** `publishTelemetry()` function in ESP32 receiver code
 
 ---
 
@@ -223,46 +235,75 @@ The "Energy Harvested" metric is displayed in the status card at the top of the 
 
 ## Data Flow Architecture
 
-### Frontend to Backend Communication
+### MQTT-Based Communication
 
 ```
-Dashboard (pages/dashboard.js)
-    ↓
-getApiUrl() → Determines API endpoint
-    ↓
-fetchData() → GET /data → ESP32 /data endpoint
-loadHistory() → GET /api/history → ESP32 /api/history endpoint
-sendControl() → POST /control → ESP32 /control endpoint
+ESP32 Transmitter
+    ↓ ESP-NOW
+ESP32 Receiver
+    ↓ MQTT Publish
+EMQX Cloud (MQTT Broker)
+    ↓ MQTT Subscribe
+    ├─→ Frontend Dashboard (MQTT WebSocket)
+    │   └─→ Real-time display
+    └─→ Backend API (MQTT client)
+        └─→ MySQL Database (persistent storage)
 ```
 
-### API Proxy Layer
+### Frontend Data Flow
 
-**Location:** `pages/api/tunnel-proxy.js`
+**Location:** `pages/dashboard.js`
 
-When using Cloudflare tunnel, requests are proxied through Next.js API routes to avoid CORS issues:
+1. **Real-time Telemetry:**
+   - MQTT WebSocket connection to EMQX Cloud
+   - Subscribes to: `solar-tracker/+/telemetry`
+   - Receives JSON messages every ~350ms
+   - Updates dashboard state in real-time
 
-```
-Frontend → /api/tunnel-proxy?endpoint=/data → Cloudflare Tunnel → ESP32
-```
+2. **History Data:**
+   - Fetched from backend API: `GET /api/history.csv`
+   - Backend queries MySQL database
+   - Returns CSV format for frontend parsing
 
-### ESP32 Endpoints
+3. **Control Commands (if enabled):**
+   - Publishes to MQTT topic: `solar-tracker/{device_id}/control`
+   - ESP32 subscribes and processes commands
 
-**Location:** `arduino.md`
+### Backend Data Flow
 
-1. **`/data` endpoint** (Line 401-403)
-   - Handler: `handle_data()`
-   - Function: `sendTelemetryJson()` (Lines 313-398)
-   - Returns: JSON telemetry packet
+**Location:** `backend/src/ingest.js`
 
-2. **`/api/history` endpoint** (Lines 450-459)
-   - Handler: `handle_history()`
-   - Returns: CSV file from LittleFS (`/history.csv`)
-   - Format: `timestamp,energy_wh,battery_pct,device_name,session_min`
+1. **MQTT Subscription:**
+   - Connects to EMQX Cloud MQTT broker
+   - Subscribes to: `solar-tracker/+/telemetry`
+   - Subscribes to: `solar-tracker/+/status`
 
-3. **`/control` endpoint** (Lines 405-448)
-   - Handler: `handle_control()`
-   - Accepts: POST requests with form-urlencoded data
-   - Processes: Control commands (mode, tilt, pan, price, deviceName)
+2. **Data Storage:**
+   - Receives telemetry messages
+   - Parses JSON data
+   - Inserts into MySQL `telemetry` table
+
+3. **API Endpoints:**
+   - `GET /api/latest` - Returns latest telemetry from database
+   - `GET /api/history.csv` - Returns historical data as CSV
+   - `GET /api/telemetry` - Returns raw telemetry records
+
+### ESP32 Data Flow
+
+**Location:** `docs/arduino/arduino_receiver.md`
+
+1. **ESP-NOW Reception:**
+   - Receives telemetry packets from transmitter ESP32
+   - Updates `latestTelemetry` structure
+
+2. **MQTT Publishing:**
+   - Publishes to: `solar-tracker/{device_id}/telemetry` (every 350ms)
+   - Publishes to: `solar-tracker/{device_id}/status` (on connect/disconnect)
+   - Uses QoS 1 for reliable delivery
+
+3. **History Logging:**
+   - Periodically logs to ESP32's internal storage
+   - History data is also stored in backend MySQL database
 
 ### Data Storage
 
@@ -281,32 +322,20 @@ Frontend → /api/tunnel-proxy?endpoint=/data → Cloudflare Tunnel → ESP32
 
 **Frontend State Variables** (in `pages/dashboard.js`):
 
-- `data` (Line 10): Current telemetry JSON from `/data` endpoint
-- `historyData` (Line 11): CSV string from `/api/history` endpoint
-- `gridPrice` (Line 16): Grid price in cents/kWh
-- `totalEnergyKWh` (Lines 523-532): Calculated from `historyData`
+- `data`: Current telemetry JSON from MQTT messages
+- `historyData`: CSV string from backend `/api/history.csv` endpoint
+- `gridPrice`: Grid price in cents/kWh (from telemetry or user input)
+- `totalEnergyKWh`: Calculated from `historyData`
 
 ### Update Intervals
 
-**Location:** Lines 420-433
+**MQTT Real-time Updates:**
+- **Telemetry Data:** Received via MQTT every ~350ms (push-based, no polling)
+- **Status Updates:** Received via MQTT on device connect/disconnect
 
-```javascript
-useEffect(() => {
-  if (typeof window !== "undefined" && sessionStorage.getItem("isAuthenticated")) {
-    fetchData();
-    loadHistory();
-    const dataInterval = setInterval(fetchData, 350);      // Every 350ms
-    const historyInterval = setInterval(loadHistory, 30000); // Every 30 seconds
-    return () => {
-      clearInterval(dataInterval);
-      clearInterval(historyInterval);
-    };
-  }
-}, []);
-```
-
-- **Telemetry Data:** Fetched every 350ms (0.35 seconds)
-- **History Data:** Fetched every 30 seconds
+**Polling (for history only):**
+- **History Data:** Fetched from backend API every 30 seconds
+- **Backend API:** Queries MySQL database for historical data
 
 ---
 
@@ -314,20 +343,23 @@ useEffect(() => {
 
 | Data Point | Frontend Location | Backend Location | Data Source |
 |------------|-------------------|------------------|-------------|
-| **Total Energy** | `dashboard.js:523-532` | ESP32 `/api/history` | CSV history file |
-| **Average per Day** | `dashboard.js:1259-1261` | Calculated from Total Energy | Derived metric |
-| **Estimated Savings** | `dashboard.js:1267` | Calculated from Total Energy × Grid Price | Derived metric |
-| **Most Active Device** | `dashboard.js:1272-1290` | ESP32 `/api/history` | CSV history file |
-| **Realtime Telemetry** | `dashboard.js:107-241, 907-1002` | ESP32 `/data` | Live sensor data |
-| **Energy Harvested** | `dashboard.js:897-903` | Same as Total Energy | CSV history file |
+| **Total Energy** | `dashboard.js` | Backend `/api/history.csv` | MySQL database |
+| **Average per Day** | `dashboard.js` | Calculated from Total Energy | Derived metric |
+| **Estimated Savings** | `dashboard.js` | Calculated from Total Energy × Grid Price | Derived metric |
+| **Most Active Device** | `dashboard.js` | Backend `/api/history.csv` | MySQL database |
+| **Realtime Telemetry** | `dashboard.js` (MQTT) | ESP32 → MQTT → EMQX Cloud | Live sensor data via MQTT |
+| **Energy Harvested** | `dashboard.js` | Same as Total Energy | MySQL database |
 
 ---
 
 ## Notes
 
-- All calculations are performed client-side in the React component
-- History data is stored on the ESP32 device in LittleFS filesystem
-- Real-time telemetry is fetched frequently (350ms) for live updates
-- History data is fetched less frequently (30s) to reduce load
-- The dashboard supports multiple connection modes: AP Mode, Proxy Mode, and Tunnel Mode
+- **MQTT-Based Architecture**: All real-time telemetry uses MQTT pub/sub (no HTTP polling)
+- **Push-Based Updates**: Telemetry is pushed from ESP32 via MQTT (every ~350ms)
+- **Backend Storage**: Backend subscribes to MQTT and stores all telemetry in MySQL
+- **History Data**: Fetched from backend MySQL database (not from ESP32)
+- **No Tunneling Required**: ESP32 connects directly to EMQX Cloud MQTT broker
+- **No USB Required**: ESP32 runs independently after initial WiFi configuration
+- **Calculations**: Performed client-side in the React component
+- **Real-time Updates**: Automatic via MQTT WebSocket (no polling needed)
 

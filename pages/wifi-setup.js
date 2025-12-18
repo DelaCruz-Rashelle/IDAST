@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
 import Head from "next/head";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+// Removed API_BASE_URL - WiFi setup only works via direct AP mode connection
 
 export default function WiFiSetup() {
   const router = useRouter();
@@ -28,25 +28,10 @@ export default function WiFiSetup() {
     }
   }, [router]);
 
-  // Get API URL - try multiple connection methods
+  // Get API URL - only AP mode is needed for initial WiFi configuration
   const getApiUrl = () => {
-    // 1. If we have ESP32's router IP, use proxy route
-    if (staIP && staIP !== "Not connected" && staIP.length > 0) {
-      return `/api/proxy?ip=${staIP}`;
-    }
-    
-    // 2. Try tunnel if configured
-    const customTunnelURL = typeof window !== "undefined" ? localStorage.getItem("customTunnelURL") : null;
-    if (customTunnelURL && customTunnelURL.length > 0) {
-      return `/api/tunnel-proxy?endpoint=`;
-    }
-    
-    // 3. Check environment variable for tunnel
-    if (API_BASE_URL && API_BASE_URL.length > 0) {
-      return `/api/tunnel-proxy?endpoint=`;
-    }
-    
-    // 4. Fall back to AP mode (for initial setup when ESP32 not on router WiFi yet)
+    // WiFi setup only works when connected to ESP32's AP network
+    // Direct connection to AP mode IP address
     return `http://${apIP}`;
   };
 
@@ -55,28 +40,12 @@ export default function WiFiSetup() {
     setStatus("🔄 Connecting to ESP32...");
     const isHTTPS = typeof window !== "undefined" && window.location.protocol === "https:";
     
-    // Build list of connection methods to try (in order of preference)
+    // Build list of connection methods to try
+    // WiFi setup only works when connected to ESP32's AP network
     const connectionMethods = [];
     
-    // 1. Try ESP32's router IP (if we already know it from previous connection)
-    if (staIP && staIP !== "Not connected" && staIP.length > 0) {
-      if (isHTTPS) {
-        connectionMethods.push({ type: 'proxy', url: `/api/proxy?ip=${staIP}&endpoint=/data`, desc: 'router IP via proxy' });
-      } else {
-        connectionMethods.push({ type: 'direct', url: `http://${staIP}/data`, desc: 'router IP direct' });
-      }
-    }
-    
-    // 2. Try tunnel (if configured)
-    const customTunnelURL = typeof window !== "undefined" ? localStorage.getItem("customTunnelURL") : null;
-    if (customTunnelURL || (API_BASE_URL && API_BASE_URL.length > 0)) {
-      connectionMethods.push({ type: 'tunnel', url: `/api/tunnel-proxy?endpoint=/data`, desc: 'tunnel' });
-    }
-    
-    // 3. Try AP mode (for initial setup)
-    if (isHTTPS) {
-      connectionMethods.push({ type: 'proxy', url: `/api/proxy?ip=${apIP}&endpoint=/data`, desc: 'AP via proxy' });
-    }
+    // Try AP mode (for initial setup)
+    // Note: Must be accessed via HTTP (not HTTPS) when on ESP32's AP network
     connectionMethods.push({ type: 'direct', url: `http://${apIP}/data`, desc: 'AP direct' });
     
     // Try each connection method
@@ -143,28 +112,12 @@ export default function WiFiSetup() {
     
     const isHTTPS = typeof window !== "undefined" && window.location.protocol === "https:";
     
-    // Build list of connection methods to try (in order of preference)
+    // Build list of connection methods to try
+    // WiFi setup only works when connected to ESP32's AP network
     const connectionMethods = [];
     
-    // 1. Try ESP32's router IP (if we know it)
-    if (staIP && staIP !== "Not connected" && staIP.length > 0) {
-      if (isHTTPS) {
-        connectionMethods.push({ type: 'proxy', url: `/api/proxy?ip=${staIP}&endpoint=/wifi-config` });
-      } else {
-        connectionMethods.push({ type: 'direct', url: `http://${staIP}/wifi-config` });
-      }
-    }
-    
-    // 2. Try tunnel (if configured)
-    const customTunnelURL = typeof window !== "undefined" ? localStorage.getItem("customTunnelURL") : null;
-    if (customTunnelURL || (API_BASE_URL && API_BASE_URL.length > 0)) {
-      connectionMethods.push({ type: 'tunnel', url: `/api/tunnel-proxy?endpoint=/wifi-config` });
-    }
-    
-    // 3. Try AP mode (for initial setup)
-    if (isHTTPS) {
-      connectionMethods.push({ type: 'proxy', url: `/api/proxy?ip=${apIP}&endpoint=/wifi-config` });
-    }
+    // Try AP mode (for initial setup)
+    // Note: Must be accessed via HTTP (not HTTPS) when on ESP32's AP network
     connectionMethods.push({ type: 'direct', url: `http://${apIP}/wifi-config` });
     
     // Try each connection method

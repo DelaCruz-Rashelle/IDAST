@@ -1,8 +1,12 @@
 # Cloudflare Tunnel CORS Fix Documentation
 
-## Problem Description
+> **⚠️ OBSOLETE**: This document describes the old HTTP-based architecture. The system now uses MQTT (EMQX Cloud) for all data communication. Tunneling is no longer required. See `docs/mqtt/MQTT_SETUP.md` for current setup instructions.
+
+## Problem Description (Historical)
 
 When deploying the Next.js application to Vercel, the app was unable to connect to the ESP32 device through the Cloudflare tunnel, even though the tunnel was working correctly when accessed directly in a browser.
+
+**Note:** This issue is no longer relevant as the system has been migrated to MQTT-based architecture.
 
 ### Symptoms
 - ✅ Cloudflare tunnel URL works when accessed directly in browser (shows real-time data)

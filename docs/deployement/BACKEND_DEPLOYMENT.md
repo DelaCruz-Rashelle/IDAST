@@ -22,7 +22,7 @@ This document provides step-by-step instructions for deploying the IDAST telemet
 The IDAST telemetry backend is an Express.js service that:
 - Stores ESP32 telemetry data in a MySQL database
 - Provides REST API endpoints for querying telemetry data
-- Automatically ingests telemetry from ESP32 devices via Cloudflare tunnel
+- Automatically ingests telemetry from ESP32 devices via MQTT (EMQX Cloud)
 - Automatically creates database tables on startup
 
 **Tech Stack:**
@@ -39,8 +39,9 @@ Before deploying, ensure you have:
 
 1. **Railway Account**: Sign up at [railway.app](https://railway.app)
 2. **GitHub Repository**: Your backend code pushed to GitHub
-3. **Cloudflare Tunnel URL**: (Optional) If using telemetry ingestion, you need a Cloudflare tunnel URL pointing to your ESP32 device
-4. **Node.js 18+**: Required for local development/testing
+3. **EMQX Cloud Account**: Sign up at [emqx.com](https://www.emqx.com/en/cloud) for MQTT broker
+4. **MQTT Broker Credentials**: Username and password for EMQX Cloud deployment
+5. **Node.js 18+**: Required for local development/testing
 
 ---
 
@@ -128,8 +129,12 @@ Check backend logs for:
 
 ```
 Database schema initialized (telemetry table ready)
-Listening on port 3000
-Ingest loop starting: every 10000ms
+MQTT ingest starting...
+Connecting to MQTT broker: mqtts://your-broker.emqx.cloud:8883
+✅ MQTT client connected
+✅ Subscribed to: solar-tracker/+/telemetry
+✅ Subscribed to: solar-tracker/+/status
+Listening on port 8080
 ```
 
 Visit your backend URL (provided by Railway) to see:
@@ -159,9 +164,10 @@ These are automatically provided by Railway when you connect the MySQL service:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `TUNNEL_BASE_URL` | Cloudflare tunnel URL for ESP32 | Required if `INGEST_ENABLED=true` |
-| `INGEST_ENABLED` | Enable telemetry ingestion loop | `true` |
-| `INGEST_INTERVAL_MS` | Ingestion interval in milliseconds | `10000` (10 seconds) |
+| `MQTT_BROKER_URL` | MQTT broker URL (required for ingestion) | Required if `INGEST_ENABLED=true` |
+| `MQTT_USERNAME` | MQTT broker username | Optional (if broker requires auth) |
+| `MQTT_PASSWORD` | MQTT broker password | Optional (if broker requires auth) |
+| `INGEST_ENABLED` | Enable MQTT telemetry ingestion | `true` |
 | `DATABASE_URL` | Alternative MySQL connection string | Uses individual MySQL vars if not set |
 
 ### Setting Optional Variables
@@ -170,17 +176,23 @@ These are automatically provided by Railway when you connect the MySQL service:
 2. Click **"New Variable"**
 3. Add variables as needed:
 
-**Example: Enable Ingestion with Custom Interval**
+**Example: Enable MQTT Ingestion**
 ```
-TUNNEL_BASE_URL=https://your-tunnel.trycloudflare.com
+MQTT_BROKER_URL=mqtts://your-deployment-id.emqx.cloud:8883
+MQTT_USERNAME=solar-tracker
+MQTT_PASSWORD=your-password
 INGEST_ENABLED=true
-INGEST_INTERVAL_MS=5000
 ```
 
 **Example: Disable Ingestion**
 ```
 INGEST_ENABLED=false
 ```
+
+**Note:** For EMQX Cloud, use:
+- Protocol: `mqtts://` (MQTT over TLS)
+- Port: `8883` (TLS port)
+- No `/mqtt` suffix needed for backend
 
 ---
 
@@ -348,23 +360,27 @@ Returns raw telemetry records for a time range.
 
 ## Telemetry Ingestion Service
 
-The backend can automatically fetch telemetry from ESP32 devices and store it in the database.
+The backend automatically subscribes to MQTT topics and stores telemetry data in the database.
 
 ### How It Works
 
-1. On startup, if `INGEST_ENABLED !== "false"`, the backend starts an ingestion loop
-2. Every `INGEST_INTERVAL_MS` milliseconds, it:
-   - Fetches telemetry from `TUNNEL_BASE_URL/data`
+1. On startup, if `INGEST_ENABLED !== "false"`, the backend connects to the MQTT broker
+2. Subscribes to topics:
+   - `solar-tracker/+/telemetry` - Real-time telemetry data
+   - `solar-tracker/+/status` - Device status updates
+3. When messages are received:
+   - Parses JSON telemetry data
    - Inserts the data into the `telemetry` table
-3. Errors are logged but don't stop the loop (with 2-second backoff)
+4. Errors are logged but don't stop the MQTT connection (automatic reconnection)
 
 ### Configuration
 
-**Enable Ingestion:**
+**Enable MQTT Ingestion:**
 ```
-TUNNEL_BASE_URL=https://your-tunnel.trycloudflare.com
+MQTT_BROKER_URL=mqtts://your-deployment-id.emqx.cloud:8883
+MQTT_USERNAME=solar-tracker
+MQTT_PASSWORD=your-password
 INGEST_ENABLED=true
-INGEST_INTERVAL_MS=10000
 ```
 
 **Disable Ingestion:**
@@ -374,20 +390,27 @@ INGEST_ENABLED=false
 
 ### Requirements
 
-- `TUNNEL_BASE_URL` must point to a Cloudflare tunnel URL that forwards to your ESP32 device
-- ESP32 must be running and accessible via the tunnel
-- ESP32 must have a `/data` endpoint that returns JSON telemetry
+- `MQTT_BROKER_URL` must point to your EMQX Cloud deployment (or other MQTT broker)
+- ESP32 devices must be publishing to `solar-tracker/{device_id}/telemetry` topic
+- MQTT broker must be accessible from Railway (internet connection required)
+- If broker requires authentication, set `MQTT_USERNAME` and `MQTT_PASSWORD`
 
 ### Logs
 
-Successful ingestion:
+Successful connection:
 ```
-Ingest loop starting: every 10000ms
+MQTT ingest starting...
+Connecting to MQTT broker: mqtts://your-broker.emqx.cloud:8883
+✅ MQTT client connected
+✅ Subscribed to: solar-tracker/+/telemetry
+✅ Subscribed to: solar-tracker/+/status
+✅ Telemetry stored from device: esp32-receiver-08D1F9
 ```
 
 Errors:
 ```
-Ingest tick failed: Tunnel fetch failed: 500 Internal Server Error
+MQTT connection failed: Connection refused
+MQTT reconnect attempt in 5 seconds...
 ```
 
 ---
@@ -441,14 +464,17 @@ Ingest tick failed: Tunnel fetch failed: 500 Internal Server Error
 
 **Check:**
 1. Is ingestion enabled? (`INGEST_ENABLED !== "false"`)
-2. Is `TUNNEL_BASE_URL` set correctly?
-3. Check backend logs for ingestion errors
-4. Verify ESP32 is accessible via tunnel
+2. Is `MQTT_BROKER_URL` set correctly?
+3. Check backend logs for MQTT connection status
+4. Verify ESP32 is publishing to MQTT topics
+5. Check EMQX Cloud dashboard for active connections
 
 **Solutions:**
-- Ensure `TUNNEL_BASE_URL` is set and points to your ESP32
-- Check ESP32 is online and responding to `/data` endpoint
-- Verify Cloudflare tunnel is running and forwarding correctly
+- Ensure `MQTT_BROKER_URL` is set and points to your EMQX Cloud deployment
+- Verify `MQTT_USERNAME` and `MQTT_PASSWORD` are correct (if required)
+- Check ESP32 is connected to WiFi and publishing to MQTT
+- Verify MQTT broker is accessible from Railway
+- Check EMQX Cloud dashboard → Clients to see if backend is connected
 
 ---
 
@@ -507,10 +533,11 @@ This is a harmless deprecation warning from npm. Railway uses the old `--product
    MYSQL_DATABASE=idast_telemetry
    
    # Optional
-   PORT=3000
-   TUNNEL_BASE_URL=https://your-tunnel.trycloudflare.com
+   PORT=8080
+   MQTT_BROKER_URL=mqtts://your-deployment-id.emqx.cloud:8883
+   MQTT_USERNAME=solar-tracker
+   MQTT_PASSWORD=your-password
    INGEST_ENABLED=true
-   INGEST_INTERVAL_MS=10000
    ```
 
 3. **Run Development Server:**
@@ -566,9 +593,11 @@ mysql -u root -p idast_telemetry < backend/schema.sql
 - [ ] MySQL service created and running in Railway
 - [ ] Backend service created and connected to GitHub repo
 - [ ] MySQL service referenced in backend variables
-- [ ] Optional: `TUNNEL_BASE_URL` set if using ingestion
-- [ ] Optional: `INGEST_ENABLED` and `INGEST_INTERVAL_MS` configured
+- [ ] `MQTT_BROKER_URL` set (required for ingestion)
+- [ ] `MQTT_USERNAME` and `MQTT_PASSWORD` set (if broker requires auth)
+- [ ] Optional: `INGEST_ENABLED` configured (defaults to `true`)
 - [ ] Backend deployed and logs show "Database schema initialized"
+- [ ] Backend logs show "✅ MQTT client connected"
 - [ ] Health check endpoint returns `{"ok": true}`
 - [ ] Backend URL accessible from frontend
 
@@ -576,9 +605,11 @@ mysql -u root -p idast_telemetry < backend/schema.sql
 
 1. **No Manual SQL Required**: Schema is created automatically on startup
 2. **Railway Handles Connections**: MySQL variables are automatically injected when services are connected
-3. **Ingestion is Optional**: Set `INGEST_ENABLED=false` to disable automatic telemetry fetching
-4. **CORS Enabled**: Backend allows all origins by default
-5. **Error Handling**: Backend exits on schema failure but continues on ingestion errors
+3. **MQTT-Based Ingestion**: Backend subscribes to MQTT topics for real-time telemetry
+4. **No Tunneling Required**: ESP32 connects directly to MQTT broker, backend subscribes
+5. **Automatic Reconnection**: MQTT client automatically reconnects on connection loss
+6. **CORS Enabled**: Backend allows all origins by default
+7. **Error Handling**: Backend exits on schema failure but continues on MQTT errors
 
 ---
 

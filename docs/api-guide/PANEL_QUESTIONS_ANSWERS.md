@@ -15,17 +15,20 @@ The grid price can come from two places:
    - Default value is 12.00 cents/kWh
    - The price must be between 0 and 1000
 
-2. **Loaded from the ESP32 device**
-   - When the dashboard first opens, it asks the ESP32 what price is currently saved
+2. **Received via MQTT from ESP32**
+   - ESP32 publishes grid price in telemetry messages via MQTT
+   - Dashboard receives it automatically when connected to MQTT
    - This makes sure the dashboard shows the correct price
 
 ### How It Gets Saved
 
 **Simple explanation:**
 1. User types a new price in the dashboard
-2. After 2.5 seconds (to avoid sending too many requests), the dashboard sends the new price to the ESP32
+2. Dashboard publishes the new price via MQTT to the ESP32 (if control commands are enabled)
 3. The ESP32 receives it and saves it permanently in its memory
 4. The price stays saved even if the ESP32 is turned off and back on
+
+**Note:** In the current MQTT-based architecture, control commands may be disabled. Grid price is primarily set on the ESP32 device itself.
 
 ### Where It's Saved
 
@@ -45,32 +48,32 @@ The grid price can come from two places:
 
 ### Simple Answer
 
-The history data is stored on the ESP32 device and accessed through a web address called `/api/history`.
+The history data is stored in the **MySQL database on the backend server** (Railway) and accessed through the backend API endpoint `/api/history.csv`.
 
 ### Where It Lives
 
-**On the ESP32 device:**
-- The ESP32 has a built-in web server
-- When you ask for `/api/history`, it responds with a CSV file containing all the energy history
-- The CSV file is stored on the ESP32's internal storage
+**On the Backend Server (Railway):**
+- The backend subscribes to MQTT topics and stores all telemetry data in a MySQL database
+- When you ask for `/api/history.csv`, the backend queries the database and returns a CSV file
+- The data is stored permanently in the cloud database
 
 **In the dashboard code:**
-- The dashboard has a function that asks the ESP32 for this history data
+- The dashboard fetches history data from the backend API
 - It does this automatically every 30 seconds to keep the display updated
 
 ### How It Works
 
 **Think of it like this:**
-- The ESP32 is like a website that you can visit
-- When you visit the address `/api/history`, it gives you a file with all the energy data
-- The dashboard visits this address every 30 seconds to get the latest data
+- ESP32 publishes telemetry via MQTT → Backend receives and stores in database
+- Dashboard asks backend for history → Backend queries database → Returns CSV file
+- No direct connection to ESP32 needed for history data
 
-**Different ways to connect:**
-1. **Direct connection:** Dashboard connects directly to ESP32 (like connecting to WiFi)
-2. **Through a tunnel:** Dashboard connects through a Cloudflare tunnel (for remote access)
-3. **Through a proxy:** Dashboard connects through a Next.js server that forwards the request
+**Data Flow:**
+1. **ESP32** publishes telemetry via MQTT (every 350ms)
+2. **Backend** subscribes to MQTT and stores data in MySQL database
+3. **Dashboard** fetches history from backend API every 30 seconds
 
-**In simple terms:** The history is stored on the ESP32 device. The dashboard asks for it every 30 seconds and displays it to the user.
+**In simple terms:** The history is stored in the cloud database. The ESP32 sends data via MQTT, the backend saves it, and the dashboard displays it.
 
 ---
 
@@ -78,11 +81,11 @@ The history data is stored on the ESP32 device and accessed through a web addres
 
 ### Simple Answer
 
-The system has three main APIs (ways to communicate with the ESP32), and all the data comes from the ESP32 device itself.
+The system uses **MQTT (Message Queuing Telemetry Transport)** for real-time data and **REST API** for historical data. All real-time data comes from the ESP32 device via MQTT, and historical data comes from the backend database.
 
-### The Three APIs Explained
+### The Data Sources Explained
 
-#### 1. `/data` - Real-Time Information
+#### 1. Real-Time Telemetry (MQTT)
 
 **What it contains:**
 - Current power output
@@ -95,51 +98,54 @@ The system has three main APIs (ways to communicate with the ESP32), and all the
 - And other live sensor readings
 
 **Where it comes from:**
-- The ESP32 reads all its sensors in real-time
-- It packages this information into a JSON format
-- The dashboard asks for this data every 0.35 seconds (very fast!) to show live updates
+- The ESP32 transmitter reads all its sensors in real-time
+- Sends data via ESP-NOW to ESP32 receiver
+- ESP32 receiver publishes to MQTT topic: `solar-tracker/{device_id}/telemetry`
+- Dashboard subscribes to MQTT and receives updates automatically (every ~350ms)
+- **No HTTP polling needed** - data is pushed via MQTT
 
-**Think of it like:** A live weather report that updates constantly
+**Think of it like:** A live TV broadcast - data is sent continuously, and you receive it automatically
 
-#### 2. `/api/history` - Historical Data
+#### 2. Historical Data (Backend API)
 
 **What it contains:**
 - A CSV file (like an Excel spreadsheet) with all past energy data
 - Each row has: timestamp, energy used, battery level, device name, and session time
 
 **Where it comes from:**
-- Stored in a file called `/history.csv` on the ESP32's internal storage
-- The ESP32 adds new data to this file periodically
-- When you ask for `/api/history`, the ESP32 reads this file and sends it to you
+- Backend subscribes to MQTT and stores all telemetry in MySQL database
+- When you ask for `/api/history.csv`, the backend queries the database
+- Returns CSV file with historical data
+- Dashboard fetches from backend API every 30 seconds
 
-**Think of it like:** A logbook that records everything that happened
+**Think of it like:** A library database - you ask for records, and it gives you the stored information
 
-#### 3. `/control` - Send Commands
+#### 3. Control Commands (MQTT - if enabled)
 
 **What it does:**
-- Lets you send commands to the ESP32
+- Lets you send commands to the ESP32 via MQTT
 - You can change settings like:
   - Switch between auto and manual mode
   - Adjust tilt and pan angles
   - Update the grid price
   - Set device name
-  - Configure WiFi
 
 **Where it comes from:**
 - You send commands from the dashboard
-- The ESP32 receives them and makes the changes
+- Dashboard publishes to MQTT topic: `solar-tracker/{device_id}/control`
+- ESP32 subscribes and receives commands
 
-**Think of it like:** A remote control for the ESP32
+**Think of it like:** Sending a text message - you send it, and the ESP32 receives it
 
-### How the Dashboard Connects
+### How the System Connects
 
-Sometimes the dashboard can't talk directly to the ESP32 (like when they're far apart). So we use "middlemen" called proxies:
+**MQTT-Based Architecture:**
+1. **ESP32** connects to WiFi and publishes to EMQX Cloud MQTT broker
+2. **Frontend** connects via MQTT WebSocket to EMQX Cloud
+3. **Backend** connects via MQTT client to EMQX Cloud
+4. **No tunneling or direct HTTP access needed** - everything goes through MQTT broker
 
-1. **Tunnel Proxy** - Uses Cloudflare tunnel to connect remotely
-2. **Direct Proxy** - Connects through a Next.js server
-3. **Direct Connection** - Connects directly when on the same network
-
-**In simple terms:** All the data comes from the ESP32 device. The dashboard just asks for it and displays it. The ESP32 is like a smart device that can answer questions and follow commands.
+**In simple terms:** All real-time data comes from the ESP32 via MQTT. Historical data comes from the backend database. The MQTT broker (EMQX Cloud) acts as a central message hub.
 
 ---
 
@@ -153,14 +159,15 @@ Different types of data are saved in different places. Most important data is sa
 
 #### 1. History Data (Energy Logs) - PERMANENT STORAGE
 
-**Location:** Inside the ESP32 device, in a file called `/history.csv`
+**Location:** In the MySQL database on the backend server (Railway)
 
-- This is like a spreadsheet file stored on the ESP32
+- This is like a spreadsheet stored in the cloud database
 - Each row records: when it happened, how much energy was used, battery level, device name, and session time
-- The ESP32 adds new rows to this file automatically over time
-- **Important:** This data stays saved even if you turn off the ESP32
+- The backend automatically stores telemetry data received via MQTT
+- **Important:** This data stays saved permanently in the cloud database
+- **Backup:** Data is stored in the cloud, so it's safe even if ESP32 is reset
 
-**Think of it like:** A diary that the ESP32 writes in every day
+**Think of it like:** A cloud-based diary that automatically saves everything
 
 #### 2. Grid Price - PERMANENT STORAGE
 
@@ -173,35 +180,37 @@ Different types of data are saved in different places. Most important data is sa
 
 **Think of it like:** A setting on your phone that you change once and it remembers
 
-#### 3. Real-Time Telemetry Data - NOT SAVED
+#### 3. Real-Time Telemetry Data - AUTOMATICALLY SAVED
 
-**Location:** Only shown on the dashboard (temporary)
+**Location:** Received via MQTT and displayed on dashboard, **also saved to backend database**
 
 - This is the live data you see updating on the screen
-- It's not saved anywhere - it's just for display
-- If you refresh the page, it starts fresh
-- The dashboard asks for this data every 0.35 seconds to keep it updated
+- **Also saved:** Backend automatically stores all telemetry in MySQL database
+- Data is received via MQTT (push-based, no polling)
+- The dashboard receives updates every ~350ms automatically via MQTT
+- Historical data is available from the backend database
 
-**Think of it like:** A live TV feed - you can watch it, but it's not recorded
+**Think of it like:** A live TV feed that's also being recorded automatically
 
 #### 4. Dashboard Settings - SEMI-PERMANENT
 
-**Location:** In your web browser's storage
+**Location:** In your web browser's storage (if any)
 
-- Things like your tunnel URL or proxy settings
-- These stay saved in your browser until you clear your browser data
-- They're not on the ESP32, just in your browser
+- MQTT connection settings are configured via environment variables (Vercel)
+- No local browser storage needed for connection settings
+- Settings are managed server-side
 
-**Think of it like:** Your browser's bookmarks - they stay until you delete them
+**Think of it like:** Server-side configuration - managed by the deployment platform
 
 ### Important Points to Remember
 
-1. **All important data is on the ESP32** - not on a server or in the cloud
-2. **History and grid price are permanent** - they survive power cycles
-3. **Real-time data is temporary** - it's just for display
-4. **If ESP32 is reset** - the history and settings will be lost (unless you have a backup)
+1. **History data is stored in the cloud database** - safe and permanent
+2. **Grid price is stored on ESP32** - survives power cycles
+3. **Real-time data is automatically saved** - backend stores all telemetry
+4. **If ESP32 is reset** - history data is safe in the cloud database
+5. **No USB or tunneling needed** - ESP32 runs independently via MQTT
 
-**In simple terms:** The ESP32 is like a computer that saves its own data. The dashboard is like a monitor that shows you what's happening, but doesn't save anything important.
+**In simple terms:** The ESP32 sends data via MQTT, the backend saves it in the cloud, and the dashboard displays it. Data is safe in the cloud even if the ESP32 is reset.
 
 ---
 
@@ -213,23 +222,24 @@ Different types of data are saved in different places. Most important data is sa
 - **Stays saved:** Yes, even after power cycles
 
 ### 2. API/History Location
-- **Where it is:** On the ESP32 device at the address `/api/history`
-- **What it does:** Sends a CSV file with all energy history data
+- **Where it is:** On the backend server at `/api/history.csv`
+- **What it does:** Returns a CSV file with all energy history data from MySQL database
 - **How often:** Dashboard checks every 30 seconds
 
-### 3. API Content & Source
-- **`/data`:** Live sensor readings from ESP32 (updates every 0.35 seconds)
-- **`/api/history`:** Historical data from a CSV file on the ESP32
-- **`/control`:** Commands you send to control the ESP32
-- **All data comes from:** The ESP32 device itself
+### 3. Data Sources
+- **Real-time telemetry:** Received via MQTT from ESP32 (updates every ~350ms automatically)
+- **Historical data:** Fetched from backend MySQL database via `/api/history.csv`
+- **Control commands:** Sent via MQTT to ESP32 (if enabled)
+- **Real-time data comes from:** ESP32 device via MQTT
+- **Historical data comes from:** Backend MySQL database
 
 ### 4. Data Storage
-- **History data:** Saved permanently on ESP32 in `/history.csv` file
+- **History data:** Saved permanently in MySQL database on backend server (cloud)
 - **Grid price:** Saved permanently on ESP32 in settings storage
-- **Live data:** Not saved, just displayed on screen
-- **Dashboard settings:** Saved in your browser
+- **Live data:** Automatically saved to backend database via MQTT
+- **Dashboard settings:** Managed via environment variables (Vercel)
 
-**Key Takeaway:** All important data is stored on the ESP32 device itself, not on a server or in the cloud. The dashboard is just a way to view and control it.
+**Key Takeaway:** Real-time data comes from ESP32 via MQTT. Historical data is stored in the cloud database. Data is safe in the cloud even if ESP32 is reset. No USB or tunneling needed - everything works via MQTT.
 
 ---
 

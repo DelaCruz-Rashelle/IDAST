@@ -2,29 +2,43 @@
 
 ## Overview
 
-The ESP32 receiver node now supports **dynamic WiFi configuration** via the web dashboard, eliminating the need to hardcode WiFi credentials in the Arduino code. This makes deployment and configuration much easier for end users.
+The ESP32 receiver node supports **dynamic WiFi configuration** via a web interface for initial setup. Once WiFi is configured, the ESP32 connects to the internet and publishes telemetry data via MQTT to EMQX Cloud, eliminating the need for USB connections, tunneling, or direct HTTP access.
 
 ## How It Works
 
 ### Architecture
 
 1. **Initial State**: ESP32 starts in **Access Point (AP) mode** with SSID `Solar_Capstone_Admin` (password: `12345678`)
-2. **Configuration**: User connects to AP, opens dashboard, and enters WiFi credentials
+2. **Configuration**: User connects to ESP32's AP network, opens `http://192.168.4.1/wifi-setup`, and enters WiFi credentials
 3. **Storage**: Credentials are saved to ESP32's **Preferences** (non-volatile storage)
-4. **Connection**: ESP32 attempts to connect to the configured WiFi network
-5. **Fallback**: If WiFi connection fails, ESP32 continues in AP mode
+4. **Connection**: ESP32 attempts to connect to the configured WiFi network in Station (STA) mode
+5. **MQTT Connection**: Once connected to WiFi, ESP32 automatically connects to EMQX Cloud MQTT broker
+6. **AP Mode Disabled**: After successful WiFi connection, AP mode is disabled (ESP32 runs in STA mode only)
+7. **Fallback**: If WiFi connection fails, ESP32 continues in AP mode for reconfiguration
 
 ### Data Flow
 
 ```
-User Dashboard (Browser)
+Initial Setup (One-time):
+User Device → Connect to ESP32 AP (Solar_Capstone_Admin)
+    ↓ Open http://192.168.4.1/wifi-setup
     ↓ POST /wifi-config
 ESP32 Web Server
     ↓ Save to Preferences
 ESP32 Preferences (NVS)
     ↓ Load on boot
-WiFi Station Connection
+WiFi Station Connection → Internet
+    ↓
+MQTT Connection to EMQX Cloud
+    ↓
+Publish Telemetry (solar-tracker/{device_id}/telemetry)
 ```
+
+**After Initial Setup:**
+- ESP32 runs independently (no USB needed)
+- Publishes telemetry via MQTT to EMQX Cloud
+- Frontend/Backend subscribe to MQTT topics
+- No direct HTTP access to ESP32 required
 
 ## Implementation Details
 
@@ -94,31 +108,31 @@ When new credentials are saved, ESP32:
 3. Attempts to connect with new credentials
 4. Falls back to AP mode if connection fails
 
-### Dashboard Changes
+### WiFi Setup Page
 
 #### 1. WiFi Configuration UI
 
-Added a new section in the dashboard settings card:
-- Shows current WiFi SSID (if configured)
-- Shows connection status (Configured/Not connected)
-- Edit button to change WiFi settings
-- Input fields for SSID and password
-- Save/Cancel buttons
+The WiFi setup page (`/wifi-setup`) is accessible when:
+- User is connected to ESP32's AP network (`Solar_Capstone_Admin`)
+- Accessing via `http://192.168.4.1/wifi-setup` (local access only)
+- For initial ESP32 configuration only
 
-#### 2. New Function: `sendWifiConfig()`
+**Note:** The WiFi setup page is NOT accessible from the deployed Vercel app. It must be accessed locally when connected to the ESP32's AP network.
 
-Sends WiFi credentials to ESP32 via `/wifi-config` endpoint:
-- Handles proxy mode (via `/api/proxy`)
-- Handles tunnel mode (via `/api/tunnel-proxy`)
-- Handles direct AP mode connection
-- Proper error handling and user feedback
+#### 2. Configuration Process
 
-#### 3. Status Display
+- User enters WiFi SSID and password
+- ESP32 saves credentials to Preferences
+- ESP32 attempts to connect to WiFi
+- Once connected, ESP32 connects to MQTT broker
+- AP mode is disabled after successful connection
 
-The dashboard shows:
-- Current WiFi SSID
-- Connection status (✅ Configured / ⚠️ Not connected)
-- Helpful messages for first-time setup
+#### 3. After Configuration
+
+- ESP32 runs independently in STA mode
+- Publishes telemetry via MQTT (no HTTP server needed for data)
+- Frontend/Backend connect via MQTT WebSocket
+- No direct HTTP access to ESP32 required
 
 ## Usage Instructions
 
@@ -145,9 +159,10 @@ The dashboard shows:
    - Check Serial Monitor for connection status
    - Once connected, ESP32 will show its IP address
 
-5. **Set Up Remote Access** (Optional)
-   - Use the ESP32's IP address for Cloudflare tunnel setup
-   - Or use proxy mode if ESP32 has public IP
+5. **Verify MQTT Connection**
+   - Check Serial Monitor for MQTT connection status
+   - Verify ESP32 is publishing to EMQX Cloud
+   - Check EMQX Cloud dashboard for active connections
 
 ### Changing WiFi Settings
 
@@ -220,10 +235,9 @@ WiFi credentials are stored in ESP32's NVS (Non-Volatile Storage):
 ### Arduino Files
 - `docs/arduino/arduino.md` - Main ESP32 code with WiFi configuration
 
-### Dashboard Files
-- `pages/dashboard.js` - WiFi configuration UI and handlers
-- `pages/api/proxy.js` - Proxy endpoint for WiFi config (proxy mode)
-- `pages/api/tunnel-proxy.js` - Proxy endpoint for WiFi config (tunnel mode)
+### Frontend Files
+- `pages/wifi-setup.js` - WiFi configuration page (for initial ESP32 setup)
+- `pages/login.js` - Login page (redirects directly to dashboard after MQTT migration)
 
 ### Key Functions
 
@@ -251,11 +265,20 @@ Possible improvements:
 ## Summary
 
 ✅ **WiFi credentials are no longer hardcoded**  
-✅ **Users configure WiFi via web dashboard**  
+✅ **Users configure WiFi via web interface (initial setup only)**  
 ✅ **Credentials stored in non-volatile storage**  
-✅ **Automatic reconnection on credential change**  
+✅ **Automatic MQTT connection after WiFi setup**  
+✅ **ESP32 runs independently after configuration**  
+✅ **No USB, tunneling, or HTTP polling required**  
 ✅ **Fallback to AP mode if connection fails**  
-✅ **Works with all connection modes (AP, Proxy, Tunnel)**
 
-This implementation makes the ESP32 much more user-friendly and eliminates the need to modify code for different WiFi networks!
+## Important Notes
+
+- **WiFi setup is only needed once** for initial ESP32 configuration
+- **After WiFi is configured**, ESP32 uses MQTT for all data communication
+- **WiFi setup page** must be accessed locally (when connected to ESP32's AP network)
+- **Deployed Vercel app** does not need direct access to ESP32 (uses MQTT)
+- **No tunneling required** - ESP32 connects directly to EMQX Cloud via MQTT
+
+This implementation makes the ESP32 much more user-friendly and eliminates the need for USB connections, tunneling, or constant redeployments!
 

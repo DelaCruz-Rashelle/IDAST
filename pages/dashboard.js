@@ -243,80 +243,9 @@ export default function Home() {
         return;
       }
 
-      const apiUrl = getApiUrl();
-      if (!apiUrl) {
-        setHistoryError("API URL not configured");
-        return;
-      }
-      
-      // If using proxy mode, add endpoint as query parameter
-      if (apiUrl.includes('/api/proxy')) {
-        // Extract IP from existing URL and add endpoint parameter
-        const urlObj = new URL(apiUrl, window.location.origin);
-        urlObj.searchParams.set('endpoint', '/api/history');
-        fetchUrl = urlObj.pathname + urlObj.search;
-      } else if (apiUrl.includes('/api/tunnel-proxy')) {
-        // For tunnel-proxy, properly set the endpoint query parameter
-        const urlObj = new URL(apiUrl, window.location.origin);
-        urlObj.searchParams.set('endpoint', '/api/history');
-        fetchUrl = urlObj.pathname + urlObj.search;
-      } else {
-        // Direct connection (AP mode)
-        fetchUrl = `${apiUrl}/api/history`;
-      }
-      
-      console.log("Fetching history from:", fetchUrl);
-      const res = await fetch(fetchUrl);
-      
-      // Check response status
-      if (!res.ok) {
-        const errorText = await res.text();
-        setHistoryError(`History fetch failed: ${res.status} ${res.statusText}`);
-        console.error("History fetch failed:", res.status, errorText);
-        
-        // Check if response is error JSON
-        try {
-          const json = JSON.parse(errorText);
-          if (json.error) {
-            setHistoryError(`History error: ${json.error}`);
-          }
-        } catch (e) {
-          // Not JSON, use status text
-        }
-        return;
-      }
-      
-      // Get response text
-      const text = await res.text();
-      const contentType = res.headers.get('content-type') || '';
-      
-      // Check if response is error JSON instead of CSV
-      if (contentType.includes('application/json')) {
-        try {
-          const json = JSON.parse(text);
-          if (json.error) {
-            setHistoryError(`History error: ${json.error}`);
-            console.error("History response is error JSON:", json);
-            return;
-          }
-        } catch (e) {
-          // Not JSON, continue processing as CSV
-        }
-      }
-      
-      // Validate CSV format - check if empty or header only
-      const trimmedText = text.trim();
-      const headerOnly = trimmedText === "timestamp,energy_wh,battery_pct,device_name,session_min";
-      
-      if (!trimmedText || headerOnly) {
-        // Empty or header only - this is expected initially, don't show error
-        setHistoryData(text);
-        console.log("History file is empty (no data logged yet)");
-        return;
-      }
-      
-      // Validate CSV has data rows
-      const lines = trimmedText.split("\n").filter(l => l.trim());
+      // If Railway API is not configured, show error
+      setHistoryError("Backend API not configured. Please set NEXT_PUBLIC_RAILWAY_API_BASE_URL environment variable.");
+      console.error("Railway API base URL not configured");
       if (lines.length <= 1) {
         // Only header, no data
         setHistoryData(text);

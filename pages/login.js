@@ -14,30 +14,6 @@ export default function Login() {
   const VALID_EMAIL = process.env.NEXT_PUBLIC_LOGIN_EMAIL || "admin@barangayhidalgo.gov.ph";
   const VALID_PASSWORD = process.env.NEXT_PUBLIC_LOGIN_PASSWORD || "solar2024";
 
-  // Check WiFi configuration status
-  const checkWiFiStatus = async () => {
-    // Try to connect via AP mode first (for initial setup)
-    const apIP = "192.168.4.1";
-    try {
-      const res = await fetch(`http://${apIP}/data`, { 
-        method: "GET",
-        signal: AbortSignal.timeout(3000) // 3 second timeout
-      });
-      if (res.ok) {
-        const json = await res.json();
-        // Check if WiFi is configured and connected
-        if (json.wifiConfigured && json.wifiConnected && json.staIP && json.staIP.length > 0) {
-          return { configured: true, connected: true };
-        } else if (json.wifiSSID && json.wifiSSID.length > 0) {
-          return { configured: true, connected: false };
-        }
-      }
-    } catch (e) {
-      // Can't connect - might not be on AP mode or ESP32 not available
-    }
-    return { configured: false, connected: false };
-  };
-
   const handleLogin = async (e) => {
     e.preventDefault();
     setError("");
@@ -59,21 +35,10 @@ export default function Login() {
         sessionStorage.setItem("email", email.toLowerCase().trim());
       }
       
-      // Check WiFi configuration status
-      try {
-        const wifiStatus = await checkWiFiStatus();
-        if (wifiStatus.configured && wifiStatus.connected) {
-          // WiFi is configured and connected - go to dashboard
-          router.push("/dashboard");
-        } else {
-          // WiFi not configured or not connected - go to WiFi setup
-          router.push("/wifi-setup");
-        }
-      } catch (e) {
-        // If we can't check WiFi status, assume it needs configuration
-        // User can configure it on the WiFi setup page
-        router.push("/wifi-setup");
-      }
+      // With MQTT architecture, WiFi is configured on ESP32 directly
+      // Dashboard connects via MQTT, so no need to check WiFi status via HTTP
+      // Go directly to dashboard
+      router.push("/dashboard");
     } else {
       setError("Invalid email or password");
       setLoading(false);
@@ -177,6 +142,9 @@ export default function Login() {
 
           <div className="login-footer">
             <span className="muted">Secure access to solar tracker dashboard</span>
+            <div style={{ marginTop: "8px", fontSize: "11px", opacity: 0.6 }}>
+              Need to configure ESP32 WiFi? Access <a href="/wifi-setup" style={{ color: "var(--accent)", textDecoration: "none" }}>WiFi Setup</a> when connected to ESP32's network
+            </div>
           </div>
         </div>
       </div>
