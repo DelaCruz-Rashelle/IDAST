@@ -1,21 +1,24 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <WebServer.h>
 #include <LittleFS.h>
 #include <Preferences.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
+#include <PubSubClient.h>
 
 /**
- * Dual-ESP32 architecture — Receiver/Webserver node
- * --------------------------------------------------
+ * Dual-ESP32 architecture — Receiver/MQTT Publisher node
+ * ---------------------------------------------------------
  * Responsibilities:
  *  • Receive telemetry packets from the transmitter via ESP-NOW
- *  • Relay manual controls & grid price updates back to the transmitter
- *  • Host the LittleFS-based dashboard (index.html) + REST endpoints
+ *  • Publish telemetry data to EMQX Cloud via MQTT
+ *  • Host minimal web interface for WiFi configuration (AP mode only)
  *
  * Update TRANSMITTER_MAC with the actual transmitter MAC before deployment.
- * WiFi credentials are configured via the web dashboard (not hardcoded).
+ * WiFi credentials are configured via the web interface (AP mode).
+ * MQTT credentials are configured via Preferences (set via serial or web interface).
  */
 
 // === WiFi / AP settings ===
@@ -32,11 +35,29 @@ const uint8_t WIFI_CHANNEL = 1;
 // MAC address of the *transmitter* ESP32 (sensor/servo node)
 uint8_t TRANSMITTER_MAC[6] = {0xF4, 0x65, 0x0B, 0x55, 0x40, 0x0C};
 
-// === Web server ===
+// === Web server (minimal, for WiFi config only) ===
 WebServer server(80);
 
 // === Preferences (receiver-side persistence) ===
 Preferences settings;
+
+// === MQTT settings ===
+const char* MQTT_BROKER_HOST = "j51075c2.ala.asia-southeast1.emqxsl.com";  // EMQX Cloud deployment
+const int MQTT_BROKER_PORT = 8883;  // TLS/SSL port
+String mqttUsername = "solar-tracker";
+String mqttPassword = "Admin123!";
+String deviceId = "";
+
+// === MQTT client (using TLS/SSL) ===
+WiFiClientSecure wifiClient;
+PubSubClient mqttClient(wifiClient);
+
+// === MQTT publishing ===
+unsigned long lastMqttPublishMs = 0;
+const unsigned long MQTT_PUBLISH_INTERVAL_MS = 350;  // Match telemetry rate
+bool mqttConnected = false;
+unsigned long lastMqttReconnectAttempt = 0;
+const unsigned long MQTT_RECONNECT_INTERVAL_MS = 5000;
 
 // === History logging ===
 unsigned long lastHistoryLogMs = 0;
@@ -109,6 +130,10 @@ struct ControlPacket {
   void log_history_point(const TelemetryPacket &pkt);
   void initWiFiStation();
   void reconnectWiFi();
+  void initMqtt();
+  void reconnectMqtt();
+  void publishTelemetry();
+  String getDeviceId();
 
   void onDataSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
     (void)info;
@@ -123,10 +148,22 @@ struct ControlPacket {
       gridPriceRx = latestTelemetry.gridPrice;
       currentDevice = currentDevice.length() ? currentDevice : "Unknown";
 
+      // Debug: Log when ESP-NOW data is received (only occasionally to avoid spam)
+      static unsigned long lastRecvLog = 0;
+      if (millis() - lastRecvLog > 5000) {  // Log every 5 seconds
+        lastRecvLog = millis();
+        Serial.printf("📥 ESP-NOW data received: top=%d, power=%.2fW, batt=%.1f%%\n",
+                      latestTelemetry.top, latestTelemetry.powerW, latestTelemetry.batteryPct);
+      }
+
       if (millis() - lastHistoryLogMs >= HISTORY_INTERVAL_MS) {
         lastHistoryLogMs = millis();
         log_history_point(latestTelemetry);
       }
+    } else {
+      // Debug: Log when wrong packet size is received
+      Serial.printf("⚠️ ESP-NOW packet size mismatch: expected %d, got %d\n", 
+                    sizeof(TelemetryPacket), len);
     }
     (void)info;
   }
@@ -143,15 +180,15 @@ struct ControlPacket {
     if (!wifiConfigured) {
       Serial.println("\n📶 No WiFi credentials configured.");
       Serial.println("   Device will operate in AP mode only.");
-      Serial.println("   Configure WiFi via the deployed app (WiFi Setup page).");
+      Serial.println("   Configure WiFi via: http://192.168.4.1/wifi-setup");
       return;
     }
     
     Serial.println("\n📶 Connecting to WiFi network...");
     Serial.printf("   SSID: %s\n", wifiSSID.c_str());
     
-    // Keep AP_STA mode to maintain Access Point while connecting to router
-    // Don't change WiFi mode - keep it as WIFI_AP_STA to maintain AP
+    // Switch to STA mode for internet connectivity
+    WiFi.mode(WIFI_STA);
     WiFi.disconnect();
     delay(100);
     
@@ -191,38 +228,55 @@ struct ControlPacket {
       IPAddress staIP = WiFi.localIP();
       Serial.println("✅ WiFi Station connected!");
       Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      Serial.println("🌐 DEVICE IP ADDRESS FOR TUNNELING:");
+      Serial.println("🌐 DEVICE IP ADDRESS:");
       Serial.print("   ");
       Serial.println(WiFi.localIP());
       Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
       Serial.printf("   Gateway: %s\n", WiFi.gatewayIP().toString().c_str());
       Serial.printf("   Subnet:  %s\n", WiFi.subnetMask().toString().c_str());
+      
+      // Disable AP mode after successful STA connection
+      WiFi.mode(WIFI_STA);
+      Serial.println("✅ AP mode disabled - device running in STA mode only");
+      
+      // Initialize MQTT after WiFi connection
+      initMqtt();
     } else {
       Serial.printf("❌ WiFi Station connection failed! Status code: %d\n", WiFi.status());
       Serial.println("   Device will continue in AP mode only");
+      // Re-enable AP mode if STA connection fails
+      WiFi.mode(WIFI_AP);
+      WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
       Serial.printf("   AP IP: %s\n", WiFi.softAPIP().toString().c_str());
-      Serial.println("   You can reconfigure WiFi via the deployed app (WiFi Setup page).");
+      Serial.println("   Configure WiFi via: http://" + WiFi.softAPIP().toString() + "/wifi-setup");
     }
   }
 
 void reconnectWiFi() {
   Serial.println("\n🔄 Reconnecting to WiFi with new credentials...");
-  // Ensure AP_STA mode is maintained (AP should always be available)
-  WiFi.mode(WIFI_AP_STA);
+  // Disconnect MQTT first
+  if (mqttClient.connected()) {
+    mqttClient.disconnect();
+    mqttConnected = false;
+  }
+  // Switch to STA mode
+  WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   delay(500);
   initWiFiStation();
 }
 
   void initEspNow() {
-    WiFi.mode(WIFI_AP_STA);
-    
-    // Set up Access Point first (always available)
+    // Start in AP mode for initial WiFi configuration
+    WiFi.mode(WIFI_AP);
     WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
-    Serial.printf("📡 Receiver AP MAC: %s | STA MAC: %s | channel: %u\n",
+    Serial.printf("📡 Receiver AP MAC: %s | channel: %u\n",
                   WiFi.softAPmacAddress().c_str(),
-                  WiFi.macAddress().c_str(),
                   WIFI_CHANNEL);
+    Serial.println("📡 Access Point started for WiFi configuration");
+    Serial.printf("   SSID: %s\n", AP_SSID);
+    Serial.printf("   IP: %s\n", WiFi.softAPIP().toString().c_str());
+    Serial.println("   Configure WiFi via: http://" + WiFi.softAPIP().toString() + "/wifi-setup");
     
     // Then try to connect to WiFi Station (if configured)
     initWiFiStation();
@@ -334,13 +388,169 @@ void reconnectWiFi() {
     Serial.println("ℹ️ History seeding disabled - starting with empty history");
   }
 
-  void handle_root() {
-    File file = LittleFS.open("/index.html", "r");
-    if (file) {
-      server.streamFile(file, "text/html");
-      file.close();
+  String getDeviceId() {
+    if (deviceId.length() == 0) {
+      // Generate device ID from MAC address if not set
+      String mac = WiFi.macAddress();
+      mac.replace(":", "");
+      deviceId = "esp32-receiver-" + mac.substring(0, 6);
+      // Save to Preferences
+      settings.begin("solar_rx", false);
+      settings.putString("deviceId", deviceId);
+      settings.end();
+    }
+    return deviceId;
+  }
+
+  void initMqtt() {
+    // Load MQTT settings from Preferences
+    settings.begin("solar_rx", true);
+    String brokerHost = settings.getString("mqttBroker", MQTT_BROKER_HOST);
+    int brokerPort = settings.getInt("mqttPort", MQTT_BROKER_PORT);
+    
+    // Check if using default broker (EMQX Cloud) to set default credentials
+    String defaultBroker = String(MQTT_BROKER_HOST);
+    if (brokerHost == defaultBroker) {
+      // Using default EMQX Cloud broker, use default credentials if not set
+      mqttUsername = settings.getString("mqttUsername", "solar-tracker");
+      mqttPassword = settings.getString("mqttPassword", "Admin123!");
     } else {
-      server.send(200, "text/plain", "index.html missing in LittleFS");
+      // Custom broker, no default credentials
+      mqttUsername = settings.getString("mqttUsername", "");
+      mqttPassword = settings.getString("mqttPassword", "");
+    }
+    
+    deviceId = settings.getString("deviceId", "");
+    settings.end();
+    
+    if (deviceId.length() == 0) {
+      deviceId = getDeviceId();
+    }
+    
+    // Enable TLS (for testing - allows self-signed certs)
+    // For production, you should use: wifiClient.setCACert(root_ca);
+    wifiClient.setInsecure();
+    
+    mqttClient.setServer(brokerHost.c_str(), brokerPort);
+    mqttClient.setBufferSize(2048);  // Increase buffer for JSON messages
+    
+    Serial.println("\n📡 MQTT Configuration:");
+    Serial.printf("   Broker: %s:%d (TLS)\n", brokerHost.c_str(), brokerPort);
+    Serial.printf("   Device ID: %s\n", deviceId.c_str());
+    Serial.printf("   Username: %s\n", mqttUsername.length() > 0 ? mqttUsername.c_str() : "[not set]");
+    
+    reconnectMqtt();
+  }
+
+  void reconnectMqtt() {
+    if (WiFi.status() != WL_CONNECTED) {
+      return;  // Can't connect to MQTT without WiFi
+    }
+    
+    if (mqttClient.connected()) {
+      mqttConnected = true;
+      return;
+    }
+    
+    unsigned long now = millis();
+    if (now - lastMqttReconnectAttempt < MQTT_RECONNECT_INTERVAL_MS) {
+      return;
+    }
+    lastMqttReconnectAttempt = now;
+    
+    Serial.print("🔄 Attempting MQTT connection...");
+    String clientId = "ESP32-" + deviceId;
+    
+    // Always use authentication (credentials are set in initMqtt)
+    bool connected = mqttClient.connect(
+      clientId.c_str(), 
+      mqttUsername.c_str(), 
+      mqttPassword.c_str()
+    );
+    
+    if (connected) {
+      Serial.println(" ✅ Connected!");
+      mqttConnected = true;
+      
+      // Publish status message
+      String statusTopic = "solar-tracker/" + deviceId + "/status";
+      String statusMsg = "{\"status\":\"online\",\"timestamp\":" + String(millis()) + "}";
+      mqttClient.publish(statusTopic.c_str(), statusMsg.c_str(), true);  // Retained message
+    } else {
+      Serial.printf(" ❌ Failed, rc=%d\n", mqttClient.state());
+      mqttConnected = false;
+    }
+  }
+
+  void publishTelemetry() {
+    if (!mqttClient.connected()) {
+      return;
+    }
+    
+    if (!hasTelemetry) {
+      // Debug: Log when waiting for telemetry (only once per 10 seconds to avoid spam)
+      static unsigned long lastNoTelemetryLog = 0;
+      if (millis() - lastNoTelemetryLog > 10000) {
+        lastNoTelemetryLog = millis();
+        Serial.println("⏳ Waiting for ESP-NOW telemetry data from transmitter...");
+      }
+      return;
+    }
+    
+    unsigned long now = millis();
+    if (now - lastMqttPublishMs < MQTT_PUBLISH_INTERVAL_MS) {
+      return;
+    }
+    lastMqttPublishMs = now;
+    
+    // Build JSON message
+    String json = "{";
+    json += "\"timestamp\":" + String(millis()) + ",";
+    json += "\"device_id\":\"" + deviceId + "\",";
+    json += "\"top\":" + String(latestTelemetry.top) + ",";
+    json += "\"left\":" + String(latestTelemetry.left) + ",";
+    json += "\"right\":" + String(latestTelemetry.right) + ",";
+    json += "\"avg\":" + String(latestTelemetry.avg) + ",";
+    json += "\"horizontalError\":" + String(latestTelemetry.horizontalError) + ",";
+    json += "\"verticalError\":" + String(latestTelemetry.verticalError) + ",";
+    json += "\"tiltAngle\":" + String(latestTelemetry.tiltAngle) + ",";
+    json += "\"panAngle\":" + String(latestTelemetry.panAngle) + ",";
+    json += "\"panTarget\":" + String(latestTelemetry.panTarget) + ",";
+    json += "\"manual\":" + String(latestTelemetry.manual ? "true" : "false") + ",";
+    json += "\"steady\":" + String(latestTelemetry.steady ? "true" : "false") + ",";
+    json += "\"powerW\":" + String(latestTelemetry.powerW, 2) + ",";
+    json += "\"powerActualW\":" + String(latestTelemetry.powerActualW, 2) + ",";
+    json += "\"tempC\":" + String(latestTelemetry.tempC, 1) + ",";
+    json += "\"batteryPct\":" + String(latestTelemetry.batteryPct, 1) + ",";
+    json += "\"batteryV\":" + String(latestTelemetry.batteryV, 2) + ",";
+    json += "\"efficiency\":" + String(latestTelemetry.efficiency, 1) + ",";
+    json += "\"energyWh\":" + String(latestTelemetry.energyWh, 3) + ",";
+    json += "\"energyKWh\":" + String(latestTelemetry.energyKWh, 6) + ",";
+    json += "\"co2kg\":" + String(latestTelemetry.co2kg, 4) + ",";
+    json += "\"trees\":" + String(latestTelemetry.trees, 4) + ",";
+    json += "\"phones\":" + String(latestTelemetry.phones, 3) + ",";
+    json += "\"phoneMinutes\":" + String(latestTelemetry.phoneMinutes, 0) + ",";
+    json += "\"pesos\":" + String(latestTelemetry.pesos, 2) + ",";
+    json += "\"gridPrice\":" + String(latestTelemetry.gridPrice, 2) + ",";
+    json += "\"deviceName\":\"" + currentDevice + "\",";
+    json += "\"mode\":\"" + String(latestTelemetry.mode) + "\"";
+    json += "}";
+    
+    // Publish to MQTT topic
+    String topic = "solar-tracker/" + deviceId + "/telemetry";
+    bool published = mqttClient.publish(topic.c_str(), json.c_str(), false);  // QoS 1, not retained
+    
+    if (published) {
+      // Debug: Log successful publish (only occasionally to avoid spam)
+      static unsigned long lastPublishLog = 0;
+      if (millis() - lastPublishLog > 5000) {  // Log every 5 seconds
+        lastPublishLog = millis();
+        Serial.printf("📤 Telemetry published: power=%.2fW, batt=%.1f%%, mode=%s\n", 
+                      latestTelemetry.powerW, latestTelemetry.batteryPct, latestTelemetry.mode);
+      }
+    } else {
+      Serial.println("⚠️ MQTT publish failed");
+      mqttConnected = false;
     }
   }
 
@@ -451,9 +661,8 @@ void reconnectWiFi() {
     server.send(200, "application/json", json);
   }
 
-  void handle_data() {
-    sendTelemetryJson();
-  }
+  // Removed handle_data() - no longer serving HTTP telemetry endpoint
+  // Telemetry is now published via MQTT only
 
   void handle_control() {
     ControlPacket cmd = {};
@@ -608,16 +817,7 @@ void handle_wifi_setup() {
   server.client().stop();
 }
 
-void handle_history() {
-  File file = LittleFS.open("/history.csv", "r");
-  if (!file) {
-    server.send(200, "text/csv", "timestamp,energy_wh,battery_pct,device_name,session_min\n");
-    return;
-  }
-
-  server.streamFile(file, "text/csv");
-  file.close();
-}
+  // Removed handle_history() - history is now published via MQTT or stored in backend
 
   void sendControlPacket(const ControlPacket &cmd) {
     esp_err_t result = esp_now_send(TRANSMITTER_MAC, (const uint8_t*)&cmd, sizeof(ControlPacket));
@@ -635,34 +835,60 @@ void handle_history() {
 
   void setup() {
     Serial.begin(115200);
+    delay(1000);
+    Serial.println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    Serial.println("🌞 Solar Tracker Receiver - MQTT Edition");
+    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    
     loadSettings();
     initFilesystem();
     initEspNow();
 
-  server.on("/", handle_root);
-  server.on("/wifi-setup", handle_wifi_setup);
-  server.on("/data", handle_data);
-  server.on("/control", HTTP_POST, handle_control);
-  server.on("/wifi-config", HTTP_POST, handle_wifi_config);
-  server.on("/api/history", handle_history);
-  server.begin();
-  Serial.println("✅ Receiver web server started");
-  
-  // Display connection info
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    Serial.println("🌐 ACCESS DEVICE VIA:");
-    Serial.print("   http://");
-    Serial.println(WiFi.localIP());
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  } else {
-    Serial.println("\n📡 Access Point Mode:");
-    Serial.print("   http://");
-    Serial.println(WiFi.softAPIP());
-    Serial.println("   Configure WiFi via: http://" + WiFi.softAPIP().toString() + "/");
+    // Minimal web server - only for WiFi configuration
+    server.on("/wifi-setup", handle_wifi_setup);
+    server.on("/wifi-config", HTTP_POST, handle_wifi_config);
+    server.onNotFound([]() {
+      server.send(200, "text/html", "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>Solar Tracker</title></head><body><h1>Solar Tracker Receiver</h1><p>WiFi Configuration: <a href=\"/wifi-setup\">/wifi-setup</a></p><p>Device running in MQTT mode. Telemetry published to EMQX Cloud.</p></body></html>");
+    });
+    server.begin();
+    Serial.println("✅ Minimal web server started (WiFi config only)");
+    
+    // Display connection info
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      Serial.println("🌐 WiFi Connected:");
+      Serial.print("   IP: ");
+      Serial.println(WiFi.localIP());
+      Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    } else {
+      Serial.println("\n📡 Access Point Mode:");
+      Serial.print("   http://");
+      Serial.println(WiFi.softAPIP());
+      Serial.println("   Configure WiFi via: http://" + WiFi.softAPIP().toString() + "/wifi-setup");
+    }
   }
-}
 
 void loop() {
+  // Handle web server (for WiFi config)
   server.handleClient();
+  
+  // Handle MQTT
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!mqttClient.connected()) {
+      reconnectMqtt();
+    } else {
+      mqttClient.loop();
+      publishTelemetry();
+    }
+  } else {
+    // WiFi disconnected - try to reconnect
+    if (wifiConfigured) {
+      static unsigned long lastWiFiReconnect = 0;
+      if (millis() - lastWiFiReconnect > 30000) {  // Try every 30 seconds
+        lastWiFiReconnect = millis();
+        Serial.println("🔄 WiFi disconnected, attempting reconnect...");
+        initWiFiStation();
+      }
+    }
+  }
 }

@@ -19,21 +19,21 @@ This document describes the overall architecture, system design, and component i
 
 ## System Overview
 
-The IDAST system is a **distributed IoT application** for monitoring and controlling a dual-axis solar panel tracking system. It consists of:
+The IDAST system is a **distributed IoT application** for monitoring a dual-axis solar panel tracking system. It consists of:
 
-- **ESP32 Hardware**: Solar tracker device with sensors, servos, and web server
-- **Frontend Dashboard**: Next.js web application for real-time monitoring and control
+- **ESP32 Hardware**: Solar tracker device with sensors, servos, and MQTT publisher
+- **Frontend Dashboard**: Next.js web application for real-time monitoring via MQTT
 - **Backend API**: Express.js service for telemetry storage and querying
 - **Database**: MySQL database for persistent telemetry storage
-- **Tunneling**: Cloudflare tunnel for remote ESP32 access
+- **MQTT Broker**: EMQX Cloud for real-time message pub/sub
 
 ### Key Features
 
-- **Real-time Telemetry**: Live sensor data updates every 350ms
+- **Real-time Telemetry**: Live sensor data updates every 350ms via MQTT
 - **Historical Data**: Energy history tracking and reporting
-- **Remote Control**: Manual servo control and configuration
-- **Multiple Connection Modes**: AP mode, Proxy mode, Tunnel mode
-- **Automatic Data Ingestion**: Backend service fetches and stores telemetry
+- **MQTT-Based Communication**: No USB, tunneling, or HTTP polling required
+- **Independent Operation**: ESP32 runs standalone after initial WiFi configuration
+- **Automatic Data Ingestion**: Backend service subscribes to MQTT and stores telemetry
 - **Cross-Platform Access**: Web-based dashboard accessible from any device
 
 ---
@@ -46,18 +46,23 @@ The system follows a **3-tier architecture**:
 ┌─────────────────────────────────────────────────────────┐
 │                    Presentation Layer                    │
 │  Next.js Dashboard (Vercel) - React Components          │
+│  MQTT WebSocket Client                                   │
 └─────────────────────────────────────────────────────────┘
-                          ↕ HTTP/HTTPS
+                          ↕ MQTT WebSocket
+┌─────────────────────────────────────────────────────────┐
+│                    Message Broker                        │
+│  EMQX Cloud - MQTT Broker                                │
+└─────────────────────────────────────────────────────────┘
+                          ↕ MQTT
 ┌─────────────────────────────────────────────────────────┐
 │                    Application Layer                     │
 │  Express.js API (Railway) - Business Logic              │
-│  Next.js API Routes - Proxy Layer                       │
+│  MQTT Subscriber + REST API                              │
 └─────────────────────────────────────────────────────────┘
                           ↕ SQL
 ┌─────────────────────────────────────────────────────────┐
 │                      Data Layer                          │
 │  MySQL Database (Railway) - Persistent Storage           │
-│  ESP32 LittleFS - Local History Storage                  │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -70,11 +75,11 @@ The system follows a **3-tier architecture**:
 - Client-side state management
 
 **Application Layer:**
+- MQTT message subscription
 - API endpoint handling
 - Business logic processing
 - Data transformation
-- CORS handling
-- Request proxying
+- Telemetry persistence
 
 **Data Layer:**
 - Persistent data storage
@@ -98,57 +103,62 @@ The system follows a **3-tier architecture**:
 │                    (Next.js on Vercel)                              │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │  pages/dashboard.js - Main React Component                    │  │
+│  │  - MQTT WebSocket client                                     │  │
 │  │  - Real-time telemetry display                               │  │
 │  │  - Historical charts                                         │  │
-│  │  - Control interface                                         │  │
-│  └──────────────────────────────────────────────────────────────┘  │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │  pages/api/tunnel-proxy.js - CORS Proxy                      │  │
-│  │  pages/api/proxy.js - Direct Proxy                          │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 └────────────┬───────────────────────────────┬───────────────────────┘
              │                               │
-             │ HTTPS                         │ HTTPS
+             │ MQTT WebSocket                │ HTTPS (REST API)
+             │                               │
+┌────────────▼───────────────────────────────▼──────────┐
+│              EMQX Cloud - MQTT Broker                  │
+│              (Message Pub/Sub Hub)                      │
+└────────────┬───────────────────────────────┬───────────┘
+             │                               │
+             │ MQTT                          │ MQTT
              │                               │
     ┌────────▼────────┐            ┌─────────▼──────────┐
-    │ Cloudflare      │            │ Backend API         │
-    │ Tunnel          │            │ (Express.js)        │
-    │                 │            │ (Railway)           │
-    └────────┬────────┘            └─────────┬──────────┘
+    │ ESP32 Receiver  │            │ Backend API         │
+    │ (MQTT Publisher)│            │ (Express.js)        │
+    │                 │            │ MQTT Subscriber     │
+    │ - MQTT Client   │            │ (Railway)           │
+    │ - ESP-NOW Rx    │            └─────────┬──────────┘
+    │ - WiFi Config   │                      │
+    └────────┬────────┘                      │ SQL
              │                               │
-             │ HTTP                          │ SQL
+             │ ESP-NOW                       │
              │                               │
     ┌────────▼────────┐            ┌─────────▼──────────┐
-    │ ESP32 Device    │            │ MySQL Database      │
+    │ ESP32 Transmitter│           │ MySQL Database      │
     │                 │            │ (Railway)           │
-    │ - Web Server    │            │                     │
-    │ - Sensors       │            │ - telemetry table   │
-    │ - Servos        │            │ - Auto-schema       │
-    │ - LittleFS      │            │                     │
+    │ - Sensors       │            │                     │
+    │ - Servos        │            │ - telemetry table   │
+    │ - ESP-NOW Tx    │            │ - Auto-schema       │
     └─────────────────┘            └─────────────────────┘
 ```
 
 ### Component Descriptions
 
 **1. Frontend Dashboard (Next.js/Vercel)**
-- **Technology**: Next.js 14.2+, React 18.3
+- **Technology**: Next.js 14.2+, React 18.3, mqtt.js
 - **Deployment**: Vercel (serverless)
 - **Responsibilities**:
   - Render user interface
-  - Fetch and display telemetry data
-  - Handle user interactions
-  - Manage connection modes
+  - Subscribe to MQTT telemetry topics
+  - Display real-time data updates
+  - Query historical data via REST API
   - Client-side data processing
 
 **2. Backend API (Express.js/Railway)**
-- **Technology**: Node.js 18+, Express.js 4.x
+- **Technology**: Node.js 18+, Express.js 4.x, mqtt.js
 - **Deployment**: Railway (containerized)
 - **Responsibilities**:
-  - Provide REST API endpoints
+  - Subscribe to MQTT telemetry topics
   - Store telemetry in database
-  - Query historical data
+  - Provide REST API endpoints for historical queries
   - Automatic schema initialization
-  - Telemetry ingestion service
+  - MQTT message processing
 
 **3. MySQL Database (Railway)**
 - **Technology**: MySQL 9.x
@@ -159,23 +169,31 @@ The system follows a **3-tier architecture**:
   - Data persistence
   - Automatic backups (Railway managed)
 
-**4. ESP32 Device**
+**4. ESP32 Receiver**
+- **Technology**: ESP32 microcontroller, Arduino framework, PubSubClient
+- **Deployment**: Physical hardware
+- **Responsibilities**:
+  - Receive telemetry via ESP-NOW from transmitter
+  - Publish telemetry to MQTT broker
+  - Host minimal web interface for WiFi configuration (AP mode)
+  - Manage WiFi connectivity (STA mode for internet)
+
+**5. ESP32 Transmitter**
 - **Technology**: ESP32 microcontroller, Arduino framework
 - **Deployment**: Physical hardware
 - **Responsibilities**:
-  - Read sensor data
+  - Read sensor data (LDR sensors)
   - Control servo motors
-  - Host web server
-  - Store local history (CSV)
-  - ESP-NOW communication (transmitter/receiver)
+  - Send telemetry via ESP-NOW to receiver
 
-**5. Cloudflare Tunnel**
-- **Technology**: Cloudflare Tunnel (cloudflared)
-- **Deployment**: Cloudflare infrastructure
+**6. EMQX Cloud (MQTT Broker)**
+- **Technology**: EMQX MQTT broker
+- **Deployment**: Cloud infrastructure
 - **Responsibilities**:
-  - Expose ESP32 to internet
-  - Provide secure remote access
-  - Handle SSL/TLS termination
+  - Message pub/sub routing
+  - WebSocket support for browser clients
+  - Message persistence (QoS 1)
+  - Authentication and authorization
 
 ---
 
@@ -184,21 +202,29 @@ The system follows a **3-tier architecture**:
 ### Real-Time Telemetry Flow
 
 ```
-ESP32 Sensors
+ESP32 Transmitter
     │
     ├─ Read sensors (LDR, battery, power, etc.)
     │
-    ├─ Package into JSON
+    ├─ Package into TelemetryPacket
     │
-    ├─ Store in memory (latestTelemetry)
-    │
-    └─ Serve via /data endpoint
+    └─ Send via ESP-NOW
          │
-         ├─→ Frontend Dashboard (every 350ms)
-         │   └─ Display in UI
-         │
-         └─→ Backend Ingestion Service (every 10s)
-             └─ Store in MySQL database
+         └─→ ESP32 Receiver
+              │
+              ├─ Receive telemetry packet
+              │
+              ├─ Convert to JSON
+              │
+              └─ Publish to MQTT (every 350ms)
+                   │
+                   ├─→ EMQX Cloud Broker
+                   │   │
+                   │   ├─→ Frontend Dashboard (MQTT WebSocket)
+                   │   │   └─ Display in UI (real-time)
+                   │   │
+                   │   └─→ Backend API (MQTT subscriber)
+                   │       └─ Store in MySQL database
 ```
 
 ### Historical Data Flow
@@ -343,71 +369,56 @@ Arduino IDE / PlatformIO
 
 ## Communication Patterns
 
-### Connection Modes
+### Connection Architecture
 
-The system supports **three connection modes** for accessing the ESP32:
+The system uses **MQTT pub/sub** for all real-time communication:
 
-#### 1. Access Point (AP) Mode
+#### MQTT-Based Communication
 
 ```
-Frontend Dashboard
+ESP32 Receiver
     │
-    └─ Direct HTTP connection
+    ├─ WiFi STA Mode (internet connectivity)
+    │
+    └─→ EMQX Cloud MQTT Broker
          │
-         └─→ ESP32 Access Point (192.168.4.1)
-              │
-              └─ Direct WiFi connection
+         ├─→ Frontend Dashboard (MQTT WebSocket)
+         │   └─ Real-time telemetry subscription
+         │
+         └─→ Backend API (MQTT subscriber)
+             └─ Telemetry persistence to MySQL
 ```
 
-**Use Case**: Local setup, initial configuration, offline operation
+**Use Case**: Real-time data streaming, independent operation
 
 **Characteristics**:
-- Direct connection (no internet required)
-- ESP32 creates its own WiFi network
-- IP: `192.168.4.1`
-- No CORS issues (same origin)
+- No USB connection required
+- No tunneling or port forwarding needed
+- Real-time push notifications (no polling)
+- Message persistence (QoS 1)
+- Works behind NAT/firewall
 
-#### 2. Proxy Mode
+#### WiFi Configuration (AP Mode)
 
 ```
-Frontend Dashboard (Vercel)
+User Device
     │
-    └─→ Next.js API Route (/api/proxy)
+    └─→ ESP32 Access Point (192.168.4.1)
          │
-         └─→ ESP32 Device (via public IP)
+         └─ WiFi configuration web interface
               │
-              └─ Internet connection
-```
-
-**Use Case**: ESP32 has public IP or port forwarding configured
-
-**Characteristics**:
-- Requires ESP32 to be internet-accessible
-- Uses Next.js API route as proxy
-- Avoids CORS issues
-- Requires ESP32 IP configuration
-
-#### 3. Tunnel Mode (Cloudflare)
-
-```
-Frontend Dashboard (Vercel)
-    │
-    └─→ Next.js API Route (/api/tunnel-proxy)
-         │
-         └─→ Cloudflare Tunnel
-              │
-              └─→ ESP32 Device (local network)
+              └─ Save credentials to Preferences
                    │
-                   └─ cloudflared client running
+                   └─ Switch to STA mode and connect
 ```
 
-**Use Case**: Remote access without public IP, behind NAT/firewall
+**Use Case**: Initial WiFi setup only
 
 **Characteristics**:
-- Requires Cloudflare tunnel setup
-- ESP32 can be on private network
-- Secure (Cloudflare SSL/TLS)
-- Requires tunnel URL configuration
+- AP mode enabled only when WiFi not configured
+- Disabled after successful STA connection
+- Re-enabled if STA connection fails
+- Minimal web interface for configuration only
 
 ### API Communication Patterns
 
@@ -419,18 +430,23 @@ Frontend Dashboard (Vercel)
 - `GET /api/history.csv` - Historical data (CSV)
 - `GET /api/telemetry` - Query telemetry records
 
-**ESP32 API:**
-- `GET /data` - Real-time telemetry (JSON)
-- `GET /api/history` - Historical data (CSV)
-- `POST /control` - Control commands (form-urlencoded)
+**ESP32 Web Interface (AP Mode Only):**
+- `GET /wifi-setup` - WiFi configuration page
+- `POST /wifi-config` - Save WiFi credentials
+
+**MQTT Topics:**
+- `solar-tracker/{device_id}/telemetry` - Real-time telemetry (JSON, QoS 1)
+- `solar-tracker/{device_id}/status` - Device status (JSON, QoS 1, retained)
+- `solar-tracker/{device_id}/history` - History snapshots (JSON, QoS 0, optional)
 
 #### Request/Response Patterns
 
 **Real-Time Data:**
-- **Frequency**: 350ms (frontend polling)
-- **Format**: JSON
-- **Size**: ~1-2 KB per request
-- **Caching**: None (always fresh)
+- **Frequency**: 350ms (MQTT publish rate)
+- **Format**: JSON over MQTT
+- **Size**: ~800-1000 bytes per message
+- **Delivery**: Push-based (MQTT pub/sub)
+- **QoS**: 1 (at least once delivery)
 
 **Historical Data:**
 - **Frequency**: 30s (frontend polling)
@@ -487,9 +503,9 @@ Frontend Dashboard (Vercel)
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| Tunnel | Cloudflare Tunnel | Remote ESP32 access |
+| MQTT Broker | EMQX Cloud | Message pub/sub routing |
 | CDN | Vercel Edge Network | Global content delivery |
-| SSL/TLS | Automatic (Vercel/Railway) | Secure connections |
+| SSL/TLS | Automatic (Vercel/Railway/EMQX) | Secure connections |
 
 ---
 

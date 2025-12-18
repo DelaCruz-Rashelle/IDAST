@@ -1,19 +1,22 @@
 import { pool } from "./db.js";
+import mqtt from "mqtt";
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function getTunnelBaseUrl() {
-  const base = process.env.TUNNEL_BASE_URL;
-  if (!base) throw new Error("Missing required env var: TUNNEL_BASE_URL");
-  return base.endsWith("/") ? base.slice(0, -1) : base;
+function getMqttBrokerUrl() {
+  const url = process.env.MQTT_BROKER_URL;
+  if (!url) throw new Error("Missing required env var: MQTT_BROKER_URL");
+  return url;
 }
 
-export function getIngestIntervalMs() {
-  const v = process.env.INGEST_INTERVAL_MS ? Number(process.env.INGEST_INTERVAL_MS) : 10_000;
-  if (!Number.isFinite(v) || v < 1000) return 10_000;
-  return v;
+function getMqttUsername() {
+  return process.env.MQTT_USERNAME || "";
+}
+
+function getMqttPassword() {
+  return process.env.MQTT_PASSWORD || "";
 }
 
 function toBool01(v) {
@@ -39,13 +42,23 @@ function toInt(v) {
   return n === null ? null : Math.trunc(n);
 }
 
-export async function fetchEsp32Telemetry() {
-  const url = `${getTunnelBaseUrl()}/data`;
-  const res = await fetch(url, { headers: { Accept: "application/json" } });
-  if (!res.ok) throw new Error(`Tunnel fetch failed: ${res.status} ${res.statusText}`);
-  const json = await res.json();
-  if (!json || typeof json !== "object") throw new Error("Invalid JSON from ESP32 /data");
-  return json;
+// MQTT message handler - processes telemetry messages from ESP32
+async function handleMqttMessage(topic, message) {
+  try {
+    const telemetry = JSON.parse(message.toString());
+    if (!telemetry || typeof telemetry !== "object") {
+      console.error("Invalid telemetry JSON from topic:", topic);
+      return;
+    }
+    
+    // Insert telemetry into database
+    await insertTelemetryRow(telemetry);
+    console.log(`✅ Telemetry stored from device: ${telemetry.device_id || "unknown"}`);
+  } catch (err) {
+    console.error("Error processing MQTT message:", err?.message || err);
+    console.error("Topic:", topic);
+    console.error("Message:", message.toString().substring(0, 200));
+  }
 }
 
 export async function insertTelemetryRow(t) {
@@ -97,34 +110,93 @@ export async function insertTelemetryRow(t) {
 }
 
 export function startIngestLoop({ logger = console } = {}) {
-  const intervalMs = getIngestIntervalMs();
-  logger.log(`Ingest loop starting: every ${intervalMs}ms`);
+  logger.log("MQTT ingest starting...");
 
-  let running = true;
-  let inFlight = false;
+  const brokerUrl = getMqttBrokerUrl();
+  const username = getMqttUsername();
+  const password = getMqttPassword();
 
-  const tick = async () => {
-    if (!running || inFlight) return;
-    inFlight = true;
-    try {
-      const t = await fetchEsp32Telemetry();
-      await insertTelemetryRow(t);
-    } catch (err) {
-      logger.error("Ingest tick failed:", err?.message || err);
-      // simple backoff: wait 2s before allowing next tick
-      await sleep(2000);
-    } finally {
-      inFlight = false;
-    }
+  logger.log(`Connecting to MQTT broker: ${brokerUrl}`);
+  if (username) {
+    logger.log(`Using authentication: ${username}`);
+  }
+
+  const clientId = `idast-backend-${Date.now()}`;
+  const connectOptions = {
+    clientId,
+    clean: true,
+    reconnectPeriod: 5000,
+    connectTimeout: 10000,
   };
 
-  const timer = setInterval(tick, intervalMs);
-  // run immediately on startup
-  tick().catch(() => {});
+  if (username && password) {
+    connectOptions.username = username;
+    connectOptions.password = password;
+  }
+
+  const client = mqtt.connect(brokerUrl, connectOptions);
+
+  client.on("connect", () => {
+    logger.log("✅ MQTT client connected");
+    
+    // Subscribe to all device telemetry topics
+    const telemetryTopic = "solar-tracker/+/telemetry";
+    client.subscribe(telemetryTopic, { qos: 1 }, (err) => {
+      if (err) {
+        logger.error(`Failed to subscribe to ${telemetryTopic}:`, err);
+      } else {
+        logger.log(`✅ Subscribed to: ${telemetryTopic}`);
+      }
+    });
+
+    // Optionally subscribe to status topics for monitoring
+    const statusTopic = "solar-tracker/+/status";
+    client.subscribe(statusTopic, { qos: 1 }, (err) => {
+      if (err) {
+        logger.error(`Failed to subscribe to ${statusTopic}:`, err);
+      } else {
+        logger.log(`✅ Subscribed to: ${statusTopic}`);
+      }
+    });
+  });
+
+  client.on("message", async (topic, message) => {
+    if (topic.includes("/telemetry")) {
+      await handleMqttMessage(topic, message);
+    } else if (topic.includes("/status")) {
+      // Log status messages but don't store them
+      try {
+        const status = JSON.parse(message.toString());
+        logger.log(`📡 Status update from ${status.device_id || "unknown"}: ${status.status}`);
+      } catch (err) {
+        // Ignore parse errors for status messages
+      }
+    }
+  });
+
+  client.on("error", (err) => {
+    logger.error("MQTT client error:", err);
+  });
+
+  client.on("close", () => {
+    logger.log("⚠️ MQTT client disconnected");
+  });
+
+  client.on("reconnect", () => {
+    logger.log("🔄 MQTT client reconnecting...");
+  });
+
+  // Graceful shutdown
+  const shutdown = () => {
+    logger.log("Shutting down MQTT client...");
+    client.end();
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 
   return () => {
-    running = false;
-    clearInterval(timer);
+    shutdown();
   };
 }
 

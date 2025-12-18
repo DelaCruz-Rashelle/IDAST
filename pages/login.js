@@ -118,7 +118,7 @@ export default function Login() {
 
             <div className="form-group">
               <label htmlFor="password">Password</label>
-              <div style={{ position: "relative" }}>
+              <div style={{ position: "relative", display: "inline-block", width: "100%" }}>
                 <input
                   type={showPassword ? "text" : "password"}
                   id="password"
@@ -127,17 +127,17 @@ export default function Login() {
                   placeholder="Enter password"
                   required
                   disabled={loading}
-                  style={{ paddingRight: "40px" }}
+                  style={{ paddingRight: "40px", width: "100%" }}
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
                   style={{
                     position: "absolute",
-                    right: "8px",
+                    right: "12px",
                     top: "50%",
                     transform: "translateY(-50%)",
-                    background: "none",
+                    background: "transparent",
                     border: "none",
                     cursor: "pointer",
                     padding: "4px",
@@ -145,7 +145,8 @@ export default function Login() {
                     alignItems: "center",
                     justifyContent: "center",
                     color: "var(--muted)",
-                    opacity: loading ? 0.5 : 1
+                    opacity: loading ? 0.5 : 1,
+                    zIndex: 1
                   }}
                   disabled={loading}
                   title={showPassword ? "Hide password" : "Show password"}

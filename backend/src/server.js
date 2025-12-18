@@ -188,11 +188,16 @@ async function startServer() {
 
 const server = await startServer();
 
-// Start ingestion loop unless explicitly disabled
+// Start MQTT ingestion loop unless explicitly disabled
 if (process.env.INGEST_ENABLED !== "false") {
-  startIngestLoop({ logger: console });
+  try {
+    startIngestLoop({ logger: console });
+  } catch (err) {
+    console.error("Failed to start MQTT ingest loop:", err);
+    console.error("Make sure MQTT_BROKER_URL is set in environment variables");
+  }
 } else {
-  console.log("INGEST_ENABLED=false; ingest loop disabled");
+  console.log("INGEST_ENABLED=false; MQTT ingest loop disabled");
 }
 
 function shutdown() {

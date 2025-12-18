@@ -2,8 +2,11 @@ import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/router";
 import Head from "next/head";
 import Link from "next/link";
+import mqtt from "mqtt";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
+const MQTT_BROKER_URL = process.env.NEXT_PUBLIC_MQTT_BROKER_URL || "";
+const MQTT_USERNAME = process.env.NEXT_PUBLIC_MQTT_USERNAME || "";
+const MQTT_PASSWORD = process.env.NEXT_PUBLIC_MQTT_PASSWORD || "";
 const RAILWAY_API_BASE_URL = process.env.NEXT_PUBLIC_RAILWAY_API_BASE_URL || "";
 
 export default function Home() {
@@ -19,28 +22,10 @@ export default function Home() {
   const [sliderActive, setSliderActive] = useState({ tilt: false, pan: false });
   const [error, setError] = useState("");
   const [historyError, setHistoryError] = useState("");
-  const [deviceIP, setDeviceIP] = useState("");
-  const [ipSaving, setIpSaving] = useState(false);
-  const [ipConfigured, setIpConfigured] = useState(false);
-  const [showIpSetup, setShowIpSetup] = useState(false);
-  const [ipEditMode, setIpEditMode] = useState(false);
-  const [ipEditValue, setIpEditValue] = useState("");
-  const ipInputFocusedRef = useRef(false);
+  const [mqttConnected, setMqttConnected] = useState(false);
+  const [deviceId, setDeviceId] = useState("");
   const deviceNameInputFocusedRef = useRef(false);
-  const [useAPMode, setUseAPMode] = useState(false);
-  const [apIP, setApIP] = useState("192.168.4.1");
-  const [staIP, setStaIP] = useState("");
-  const [showSetupWizard, setShowSetupWizard] = useState(false);
-  const [setupStep, setSetupStep] = useState(3); // 3: Tunnel URL
-  const [setupWifiSSID, setSetupWifiSSID] = useState("");
-  const [setupWifiPassword, setSetupWifiPassword] = useState("");
-  const [setupDeviceIP, setSetupDeviceIP] = useState("192.168.4.1");
-  const [setupSaving, setSetupSaving] = useState(false);
-  const [setupComplete, setSetupComplete] = useState(false);
-  const [tunnelURL, setTunnelURL] = useState("");
-  const [customTunnelURL, setCustomTunnelURL] = useState("");
-  const [tunnelEditMode, setTunnelEditMode] = useState(false);
-  const [useProxyMode, setUseProxyMode] = useState(false);
+  const mqttClientRef = useRef(null);
   
   const chartRef = useRef(null);
   const historyChartRef = useRef(null);
@@ -52,192 +37,145 @@ export default function Home() {
   const REPORT_END = new Date();
   const REPORT_START = new Date(REPORT_END.getTime() - 60 * 24 * 3600 * 1000);
 
-  // Load custom tunnel URL, proxy mode, and pending WiFi settings from localStorage on mount
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const savedTunnelURL = localStorage.getItem("customTunnelURL");
-      if (savedTunnelURL) {
-        setCustomTunnelURL(savedTunnelURL);
-      }
-      const savedProxyMode = localStorage.getItem("useProxyMode");
-      if (savedProxyMode === "true") {
-        setUseProxyMode(true);
-      }
-    }
-  }, []);
-
-  // Get the API URL (use AP mode if enabled, otherwise use proxy API or custom tunnel URL or env variable)
-  const getApiUrl = () => {
-    if (useAPMode) {
-      return `http://${apIP}`;
+  // Process MQTT telemetry message
+  const processTelemetryMessage = (json) => {
+    setData(json);
+    setError(""); // Clear error on success
+    
+    if (json.device_id) {
+      setDeviceId(json.device_id);
     }
     
-    // If we have ESP32 IP and want to use proxy mode (no manual tunnel needed)
-    // This works when ESP32 is on the same network or has public IP
-    if (useProxyMode && staIP && staIP !== "Not connected" && staIP.length > 0) {
-      // Use Next.js API route as proxy - ESP32 must be accessible from internet
-      // This works if ESP32 has public IP or is behind a router with port forwarding
-      // Note: For remote access, tunnel is still needed, but for same-network access this works
-      return `/api/proxy?ip=${staIP}`;
+    if (json.manual !== undefined) setManual(json.manual);
+    if (json.deviceName && !deviceNameInputFocusedRef.current) {
+      setCurrentDevice(json.deviceName);
+      setDeviceName(json.deviceName);
+    }
+    if (json.gridPrice && typeof window !== "undefined" && document.activeElement?.id !== "gridPrice") {
+      setGridPrice(json.gridPrice.toFixed(2));
+    }
+    if (!sliderActive.tilt && json.tiltAngle !== undefined) {
+      setTiltValue(json.tiltAngle);
+    }
+    if (!sliderActive.pan && json.panTarget !== undefined) {
+      setPanValue(json.panTarget);
     }
     
-    // Use custom tunnel URL from localStorage if available
-    if (customTunnelURL && customTunnelURL.length > 0) {
-      // For custom tunnel URLs, use proxy to avoid CORS issues when deployed
-      return `/api/tunnel-proxy?endpoint=`;
+    // Update sensor history for chart
+    if (json.top !== undefined) {
+      sensorHistory.current.top.push(json.top);
+      if (sensorHistory.current.top.length > 120) sensorHistory.current.top.shift();
     }
-    
-    // If API_BASE_URL is set (from env), use proxy to avoid CORS issues
-    if (API_BASE_URL && API_BASE_URL.length > 0) {
-      return `/api/tunnel-proxy?endpoint=`;
+    if (json.left !== undefined) {
+      sensorHistory.current.left.push(json.left);
+      if (sensorHistory.current.left.length > 120) sensorHistory.current.left.shift();
     }
-    
-    return "";
+    if (json.right !== undefined) {
+      sensorHistory.current.right.push(json.right);
+      if (sensorHistory.current.right.length > 120) sensorHistory.current.right.shift();
+    }
+    drawSensorGraph();
   };
 
-  // Fetch telemetry data
-  const fetchData = async () => {
-    const apiUrl = getApiUrl();
-    if (!apiUrl) {
-      setError("API URL not configured. Please either:\n1. Set NEXT_PUBLIC_API_BASE_URL in Vercel environment variables, OR\n2. Connect to ESP32 Access Point and use AP mode (192.168.4.1)");
+  // Initialize MQTT connection
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    
+    if (!MQTT_BROKER_URL) {
+      setError("MQTT broker URL not configured. Please set NEXT_PUBLIC_MQTT_BROKER_URL in Vercel environment variables.");
       return;
     }
-    try {
-      // If using proxy, append endpoint; otherwise use full URL
-      const fetchUrl = apiUrl.includes('/api/') 
-        ? `${apiUrl}/data` 
-        : `${apiUrl}/data`;
+    
+    const clientId = `idast-dashboard-${Date.now()}`;
+    const connectOptions = {
+      clientId,
+      clean: true,
+      reconnectPeriod: 5000,
+      connectTimeout: 10000,
+    };
+    
+    if (MQTT_USERNAME && MQTT_PASSWORD) {
+      connectOptions.username = MQTT_USERNAME;
+      connectOptions.password = MQTT_PASSWORD;
+    }
+    
+    console.log("Connecting to MQTT broker:", MQTT_BROKER_URL);
+    const client = mqtt.connect(MQTT_BROKER_URL, connectOptions);
+    mqttClientRef.current = client;
+    
+    client.on("connect", () => {
+      console.log("✅ MQTT connected");
+      setMqttConnected(true);
+      setError("");
       
-      const res = await fetch(fetchUrl);
-      if (res.ok) {
-        const json = await res.json();
-        setData(json);
-        setError(""); // Clear error on success
-        if (json.manual !== undefined) setManual(json.manual);
-        if (json.deviceName && !deviceNameInputFocusedRef.current) {
-          setCurrentDevice(json.deviceName);
-          setDeviceName(json.deviceName);
-        }
-        if (json.gridPrice && typeof window !== "undefined" && document.activeElement?.id !== "gridPrice") {
-          setGridPrice(json.gridPrice.toFixed(2));
-        }
-        if (json.deviceIP !== undefined) {
-          const ip = json.deviceIP || "";
-          // Only update deviceIP if the input field is not currently focused
-          if (!ipInputFocusedRef.current) {
-            setDeviceIP(ip);
-          }
-          const isValid = ip.length > 0 && ip !== "0.0.0.0";
-          setIpConfigured(isValid);
-          setShowIpSetup(!isValid);
-        }
-        // WiFi status is now handled in wifi-setup page, but we can still track it for display
-        if (json.wifiConfigured !== undefined) {
-          // WiFi configuration status available
-        }
-        // Auto-detect WiFi connection and switch from AP mode
-        if (json.staIP !== undefined) {
-          const newStaIP = json.staIP || "";
-          setStaIP(newStaIP);
-          
-          // If ESP32 is now connected to WiFi and we're in AP mode, automatically switch
-          if (newStaIP && newStaIP !== "Not connected" && json.wifiConnected && useAPMode) {
-            // ESP32 has connected to WiFi - automatically switch to use WiFi IP
-            // Use proxy mode if ESP32 IP is available
-            if (newStaIP.length > 0) {
-              setUseProxyMode(true);
-              setUseAPMode(false);
-              // Clear any errors since we're switching modes
-              setError("");
-              console.log("✅ Auto-switched from AP mode to WiFi connection:", newStaIP);
-            }
-          }
-        }
-        if (!sliderActive.tilt && json.tiltAngle !== undefined) {
-          setTiltValue(json.tiltAngle);
-        }
-        if (!sliderActive.pan && json.panTarget !== undefined) {
-          setPanValue(json.panTarget);
-        }
-        // Update sensor history for chart
-        if (json.top !== undefined) {
-          sensorHistory.current.top.push(json.top);
-          if (sensorHistory.current.top.length > 120) sensorHistory.current.top.shift();
-        }
-        if (json.left !== undefined) {
-          sensorHistory.current.left.push(json.left);
-          if (sensorHistory.current.left.length > 120) sensorHistory.current.left.shift();
-        }
-        if (json.right !== undefined) {
-          sensorHistory.current.right.push(json.right);
-          if (sensorHistory.current.right.length > 120) sensorHistory.current.right.shift();
-        }
-        drawSensorGraph();
-      } else {
-        setError(`Backend returned ${res.status}: ${res.statusText}. Check if Cloudflare tunnel is running.`);
-      }
-    } catch (e) {
-      const errorMsg = e.message || String(e);
-      // Provide more helpful error messages
-      let userFriendlyError = `Cannot connect to backend: ${errorMsg}`;
-      
-      if (errorMsg.includes("Failed to fetch") || errorMsg.includes("NetworkError") || errorMsg.includes("ERR_FAILED")) {
-        if (!useAPMode) {
-          userFriendlyError = `Cannot connect via Cloudflare tunnel. The ESP32 may not be connected to WiFi yet.
-
-🔧 Initial Setup (First Time):
-1. Connect your computer/phone to ESP32's Access Point:
-   - SSID: "Solar_Capstone_Admin"
-   - Password: "12345678"
-2. Open browser and go to: http://192.168.4.1
-3. Configure WiFi credentials in the dashboard
-4. ESP32 will restart and connect to your router
-5. Then set up Cloudflare tunnel for remote access
-
-📡 Or use AP Mode (Direct Connection):
-Click "Switch to AP Mode" below to connect directly via Access Point (no WiFi needed)
-
-Current API URL: ${API_BASE_URL || "Not configured"}`;
+      // Subscribe to all device telemetry topics
+      const telemetryTopic = "solar-tracker/+/telemetry";
+      client.subscribe(telemetryTopic, { qos: 1 }, (err) => {
+        if (err) {
+          console.error("Failed to subscribe to telemetry:", err);
+          setError(`Failed to subscribe to MQTT topic: ${err.message}`);
         } else {
-          userFriendlyError = `Cannot connect via Access Point. Make sure:
-1. You're connected to ESP32's WiFi: "Solar_Capstone_Admin" (password: 12345678)
-2. ESP32 is powered on and AP is active
-3. Try accessing: http://${apIP} directly in your browser`;
+          console.log(`✅ Subscribed to: ${telemetryTopic}`);
         }
-      } else if (errorMsg.includes("502") || errorMsg.includes("Bad Gateway")) {
-        userFriendlyError = `ESP32 not reachable (502 Bad Gateway). The tunnel is running but can't reach the ESP32. Check:
-1. ESP32 Serial Monitor - is it connected to Wi-Fi? (Look for "STA connected. IP: 192.168.1.X")
-2. Is the tunnel pointing to the correct IP? (Should match the ESP32's STA IP)
-3. Is the ESP32 web server running? (Look for "Receiver web server started")`;
-      } else if (errorMsg.includes("CORS")) {
-        userFriendlyError = `CORS error: The ESP32 is reachable but CORS headers are missing. This usually means the request failed before reaching the ESP32.`;
-      }
-      setError(userFriendlyError);
-      console.error("Fetch error:", e);
-      console.error("API URL:", API_BASE_URL);
-    }
-  };
-
-  // Send control command
-  const sendControl = async (params) => {
-    const apiUrl = getApiUrl();
-    if (!apiUrl) {
-      throw new Error("API URL not configured");
-    }
-    const body = new URLSearchParams(params).toString();
-    
-    // If using proxy, append endpoint; otherwise use full URL
-    const fetchUrl = apiUrl.includes('/api/') 
-      ? `${apiUrl}/control` 
-      : `${apiUrl}/control`;
-    
-    const res = await fetch(fetchUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body
+      });
+      
+      // Subscribe to status topics
+      const statusTopic = "solar-tracker/+/status";
+      client.subscribe(statusTopic, { qos: 1 }, (err) => {
+        if (err) {
+          console.error("Failed to subscribe to status:", err);
+        } else {
+          console.log(`✅ Subscribed to: ${statusTopic}`);
+        }
+      });
     });
-    if (!res.ok) throw new Error("Control command failed");
-    return res;
+    
+    client.on("message", (topic, message) => {
+      try {
+        const json = JSON.parse(message.toString());
+        
+        if (topic.includes("/telemetry")) {
+          processTelemetryMessage(json);
+        } else if (topic.includes("/status")) {
+          console.log("Status update:", json);
+          if (json.device_id && !deviceId) {
+            setDeviceId(json.device_id);
+          }
+        }
+      } catch (err) {
+        console.error("Error parsing MQTT message:", err);
+      }
+    });
+    
+    client.on("error", (err) => {
+      console.error("MQTT error:", err);
+      setError(`MQTT connection error: ${err.message}`);
+      setMqttConnected(false);
+    });
+    
+    client.on("close", () => {
+      console.log("MQTT connection closed");
+      setMqttConnected(false);
+    });
+    
+    client.on("reconnect", () => {
+      console.log("MQTT reconnecting...");
+      setMqttConnected(false);
+    });
+    
+    // Cleanup on unmount
+    return () => {
+      if (client) {
+        client.end();
+      }
+    };
+  }, []);
+
+  // Note: Control commands are no longer supported via MQTT in this version
+  // (User specified no bidirectional control needed)
+  const sendControl = async (params) => {
+    console.warn("Control commands not supported in MQTT mode");
+    throw new Error("Control commands not available - MQTT mode is read-only");
   };
 
 
@@ -507,55 +445,11 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
   }, [router]);
 
   useEffect(() => {
-    // Only start fetching if authenticated
+    // Only start if authenticated
     if (typeof window !== "undefined" && sessionStorage.getItem("isAuthenticated")) {
-      // Check if WiFi is configured, if not redirect to WiFi setup
-      const wifiConfigured = sessionStorage.getItem("wifiConfigured");
-      if (!wifiConfigured) {
-        // Try to check WiFi status from ESP32
-        const checkWiFi = async () => {
-          try {
-            const apIP = "192.168.4.1";
-            const res = await fetch(`http://${apIP}/data`, { 
-              method: "GET",
-              signal: AbortSignal.timeout(3000)
-            });
-            if (res.ok) {
-              const json = await res.json();
-              if (json.wifiConfigured && json.wifiConnected && json.staIP && json.staIP.length > 0) {
-                // WiFi is configured and connected
-                sessionStorage.setItem("wifiConfigured", "true");
-              } else {
-                // WiFi not configured - redirect to WiFi setup
-                router.push("/wifi-setup");
-                return;
-              }
-            }
-          } catch (e) {
-            // Can't connect - might need WiFi setup, but allow dashboard access anyway
-            // User can manually go to WiFi setup if needed
-          }
-        };
-        checkWiFi();
-      }
-      
-      // Auto-detect: If no API URL configured and no tunnel URL, suggest AP mode
-      if (!API_BASE_URL && !customTunnelURL && !useAPMode) {
-        // Check if we can detect AP mode (user might be connected to ESP32 AP)
-        // This is a best-effort detection - user can still manually switch
-        const hostname = window.location.hostname;
-        // If accessing from localhost or IP that might be ESP32 AP, suggest AP mode
-        if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.4.')) {
-          setUseAPMode(true);
-        }
-      }
-      
-      fetchData();
       loadHistory();
-      const dataInterval = setInterval(fetchData, 350);
       const historyInterval = setInterval(loadHistory, 30000);
       return () => {
-        clearInterval(dataInterval);
         clearInterval(historyInterval);
         if (gridPriceDebounceRef.current) clearTimeout(gridPriceDebounceRef.current);
       };
@@ -661,10 +555,8 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
         }, 0)
     : 0;
 
-  // Show setup wizard for tunnel information (step 3 only)
-  const needsSetup = !setupComplete;
-
-  if (showSetupWizard && needsSetup) {
+  // Setup wizard removed - no longer needed for MQTT mode
+  if (false) {
     return (
       <>
         <Head>
@@ -922,7 +814,7 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
           <div className="header-left">
             <div className="sun"></div>
             <div className="title">Solar Tracker Telemetry</div>
-            <span className="pill">{useAPMode ? "AP Mode" : "Tunnel"}</span>
+            <span className="pill">{mqttConnected ? "MQTT Connected" : "MQTT Disconnected"}</span>
             <span className="pill">{data ? "Online" : "Offline"}</span>
           </div>
           <div className="header-right">
@@ -954,67 +846,31 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
             whiteSpace: "pre-line"
           }}>
             <strong>Connection Error:</strong> {error}
-            {!useAPMode && !API_BASE_URL && (
-              <div style={{ marginTop: "12px" }}>
-                <button
-                  className="manual-btn"
-                  onClick={() => {
-                    setUseAPMode(true);
-                    setError("");
-                  }}
-                  style={{ marginTop: "8px" }}
-                >
-                  Switch to AP Mode (Connect via Access Point)
-                </button>
-                <div style={{ marginTop: "8px", fontSize: "12px" }}>
-                  Or configure: Go to Vercel → Project Settings → Environment Variables → Add: <code>NEXT_PUBLIC_API_BASE_URL</code> = your Cloudflare tunnel URL
-                </div>
+            {!MQTT_BROKER_URL && (
+              <div style={{ marginTop: "12px", fontSize: "12px" }}>
+                Configure MQTT: Go to Vercel → Project Settings → Environment Variables → Add:
+                <br />
+                <code>NEXT_PUBLIC_MQTT_BROKER_URL</code> = wss://your-emqx-instance:8084/mqtt
+                <br />
+                <code>NEXT_PUBLIC_MQTT_USERNAME</code> = your-username (optional)
+                <br />
+                <code>NEXT_PUBLIC_MQTT_PASSWORD</code> = your-password (optional)
               </div>
             )}
-            {useAPMode && (
-              <div style={{ marginTop: "12px", padding: "12px", background: "rgba(47, 210, 122, 0.1)", border: "1px solid rgba(47, 210, 122, 0.3)", borderRadius: "8px" }}>
-                <div style={{ fontSize: "12px", marginBottom: "10px", color: "var(--ink)" }}>
-                  <strong>✅ AP Mode Active:</strong> You're connected to ESP32's Access Point. Configure WiFi below, then switch to Tunnel Mode for remote access.
-                </div>
-                <div style={{ marginTop: "8px", fontSize: "11px", color: "var(--muted)", lineHeight: "1.6" }}>
-                  <strong>Current Connection:</strong> ESP32 WiFi (<strong>Solar_Capstone_Admin</strong>)
-                  <br />
-                  <strong>Next Step:</strong> Configure WiFi credentials in the WiFi Setup page (accessible after login)
-                </div>
-                <button
-                  className="manual-btn alt"
-                  onClick={() => {
-                    setUseAPMode(false);
-                    setError("");
-                  }}
-                  style={{ marginTop: "10px", fontSize: "13px", padding: "10px 16px", width: "100%" }}
-                >
-                  Switch to Tunnel Mode (After WiFi is Configured)
-                </button>
-              </div>
-            )}
-            {!useAPMode && API_BASE_URL && (
-              <div style={{ marginTop: "12px", padding: "12px", background: "rgba(47, 210, 122, 0.1)", border: "1px solid rgba(47, 210, 122, 0.3)", borderRadius: "8px" }}>
-                <div style={{ fontSize: "12px", marginBottom: "10px", color: "var(--ink)" }}>
-                  <strong>💡 Quick Fix:</strong> If ESP32 is not connected to WiFi yet, use AP Mode to configure it first.
-                </div>
-                <button
-                  className="manual-btn"
-                  onClick={() => {
-                    setUseAPMode(true);
-                    setError("");
-                  }}
-                  style={{ fontSize: "13px", padding: "10px 16px", width: "100%" }}
-                >
-                  🔌 Switch to AP Mode (Connect via Access Point)
-                </button>
-                <div style={{ marginTop: "10px", padding: "8px", background: "rgba(0,0,0,0.2)", borderRadius: "4px", fontSize: "11px", fontFamily: "monospace" }}>
-                  <strong>Current API URL:</strong> {API_BASE_URL}
-                  <br />
-                  <strong>Note:</strong> If you restarted the Cloudflare tunnel, the URL may have changed. Update it in Vercel environment variables and redeploy.
-                </div>
-              </div>
-            )}
+          </div>
+        )}
+        
+        {!mqttConnected && MQTT_BROKER_URL && (
+          <div style={{
+            background: "rgba(245, 179, 66, 0.1)",
+            border: "1px solid #f5b342",
+            borderRadius: "8px",
+            padding: "12px",
+            marginBottom: "16px",
+            color: "#f5b342",
+            fontSize: "13px"
+          }}>
+            <strong>⚠️ MQTT Disconnected:</strong> Attempting to reconnect...
           </div>
         )}
 
@@ -1136,73 +992,47 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
               </div>
               <div className="manual-header">
                 <span className="pill">{manual ? "Manual Control" : "Auto Tracking"}</span>
-                <button
-                  className={`manual-btn ${manual ? "alt" : ""}`}
-                  onClick={() => {
-                    const next = !manual;
-                    setManual(next);
-                    sendControl({ mode: next ? "manual" : "auto" });
-                  }}
-                >
-                  {manual ? "Switch to Auto" : "Switch to Manual"}
-                </button>
+                <div style={{ fontSize: "12px", color: "var(--muted)" }}>
+                  Control disabled in MQTT mode
+                </div>
               </div>
               <div className="controls">
                 <div className="slider-group">
-                  <label htmlFor="tiltSlider">Tilt Angle</label>
+                  <label htmlFor="tiltSlider">Tilt Angle (Read-only)</label>
                   <input
                     type="range"
                     id="tiltSlider"
-                    min={data?.minTilt || 50}
-                    max={data?.maxTilt || 110}
+                    min={50}
+                    max={110}
                     value={tiltValue}
                     step="1"
-                    disabled={!manual}
-                    onChange={(e) => {
-                      const val = parseInt(e.target.value);
-                      setTiltValue(val);
-                      if (manual) sendControl({ tilt: val });
-                    }}
-                    onMouseDown={() => setSliderActive({ ...sliderActive, tilt: true })}
-                    onMouseUp={() => setSliderActive({ ...sliderActive, tilt: false })}
+                    disabled={true}
+                    style={{ opacity: 0.5 }}
                   />
                   <div className="slider-footer">
                     <span>
                       Value: <span className="mono">{tiltValue}°</span>
                     </span>
-                    <span>
-                      {data?.minTilt || 50}°-{data?.maxTilt || 110}°
-                    </span>
+                    <span>50°-110°</span>
                   </div>
                 </div>
                 <div className="slider-group">
-                  <label htmlFor="panSlider">Pan Angle</label>
+                  <label htmlFor="panSlider">Pan Angle (Read-only)</label>
                   <input
                     type="range"
                     id="panSlider"
-                    min={data?.minPan || 50}
-                    max={data?.maxPan || 130}
+                    min={50}
+                    max={130}
                     value={panValue}
                     step="1"
-                    disabled={!manual}
-                    onChange={(e) => {
-                      const val = parseInt(e.target.value);
-                      setPanValue(val);
-                      if (manual) {
-                        const slider = degToSlider(val);
-                        sendControl({ pan: slider });
-                      }
-                    }}
-                    onMouseDown={() => setSliderActive({ ...sliderActive, pan: true })}
-                    onMouseUp={() => setSliderActive({ ...sliderActive, pan: false })}
+                    disabled={true}
+                    style={{ opacity: 0.5 }}
                   />
                   <div className="slider-footer">
                     <span>
                       Value: <span className="mono">{panValue}°</span>
                     </span>
-                    <span>
-                      {data?.minPan || 50}°-{data?.maxPan || 130}°
-                    </span>
+                    <span>50°-130°</span>
                   </div>
                 </div>
               </div>
@@ -1230,26 +1060,17 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
                     maxLength={23}
                   />
                 </div>
-                <button
-                  className="manual-btn"
-                  style={{ width: "100%", marginTop: "6px", marginBottom: "12px" }}
-                  onClick={async () => {
-                    if (deviceName.trim().length > 0) {
-                      try {
-                        await sendControl({ deviceName: deviceName.trim() });
-                        setCurrentDevice(deviceName.trim());
-                        alert("✅ Charging session started for: " + deviceName.trim());
-                      } catch (e) {
-                        console.error("Failed to start charging session:", e);
-                        alert("❌ Failed to start charging session. Please check your connection.");
-                      }
-                    } else {
-                      alert("Please enter a device name first.");
-                    }
-                  }}
-                >
-                  Start Charging Session
-                </button>
+                <div style={{ 
+                  padding: "10px", 
+                  background: "rgba(47, 210, 122, 0.1)", 
+                  border: "1px solid rgba(47, 210, 122, 0.3)", 
+                  borderRadius: "8px",
+                  marginBottom: "12px",
+                  fontSize: "12px",
+                  color: "var(--muted)"
+                }}>
+                  Device registration disabled in MQTT mode. Device name is read from telemetry.
+                </div>
                 <div style={{ marginBottom: "12px", fontSize: "13px", color: "var(--ink)" }}>
                   Current Device: <span className="mono" style={{ fontWeight: "600" }}>{currentDevice}</span>
                 </div>
@@ -1262,7 +1083,8 @@ Current API URL: ${API_BASE_URL || "Not configured"}`;
                     onChange={(e) => {
                       setGridPrice(e.target.value);
                     }}
-                    onBlur={handlePriceChange}
+                    disabled={true}
+                    style={{ opacity: 0.5 }}
                     placeholder="20.00"
                     step="0.01"
                     min="0"
