@@ -1,5 +1,6 @@
 import { pool } from "./db.js";
 import mqtt from "mqtt";
+import { handleMqttError, handleDatabaseError } from "./errorHandler.js";
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -47,7 +48,7 @@ async function handleMqttMessage(topic, message) {
   try {
     const telemetry = JSON.parse(message.toString());
     if (!telemetry || typeof telemetry !== "object") {
-      console.error("Invalid telemetry JSON from topic:", topic);
+      handleMqttError(new Error("Invalid telemetry JSON"), topic, message);
       return;
     }
     
@@ -55,9 +56,7 @@ async function handleMqttMessage(topic, message) {
     await insertTelemetryRow(telemetry);
     console.log(`✅ Telemetry stored from device: ${telemetry.device_id || "unknown"}`);
   } catch (err) {
-    console.error("Error processing MQTT message:", err?.message || err);
-    console.error("Topic:", topic);
-    console.error("Message:", message.toString().substring(0, 200));
+    handleMqttError(err, topic, message);
   }
 }
 
@@ -106,7 +105,12 @@ export async function insertTelemetryRow(t) {
     rawJson,
   ];
 
-  await pool.execute(sql, params);
+  try {
+    await pool.execute(sql, params);
+  } catch (error) {
+    handleDatabaseError(error, "insert telemetry");
+    throw error; // Re-throw to allow caller to handle
+  }
 }
 
 export function startIngestLoop({ logger = console } = {}) {

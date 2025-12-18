@@ -1,4 +1,5 @@
 import mysql from "mysql2/promise";
+import { handleDatabaseError } from "./errorHandler.js";
 
 function requiredEnv(name) {
   const v = process.env[name];
@@ -92,9 +93,9 @@ export async function initSchema() {
 )`;
     await conn.query(sql);
     console.log("Database schema initialized (telemetry table ready)");
-  } catch (e) {
-    console.error("Failed to initialize schema:", e);
-    throw e;
+  } catch (error) {
+    handleDatabaseError(error, "schema initialization");
+    throw error;
   } finally {
     conn.release();
   }

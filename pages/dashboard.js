@@ -3,6 +3,7 @@ import { useRouter } from "next/router";
 import Head from "next/head";
 import Link from "next/link";
 import mqtt from "mqtt";
+import { handleMqttError, handleControlError, formatErrorMessage } from "../utils/errorHandler.js";
 
 const MQTT_BROKER_URL = process.env.NEXT_PUBLIC_MQTT_BROKER_URL || "";
 const MQTT_USERNAME = process.env.NEXT_PUBLIC_MQTT_USERNAME || "";
@@ -149,13 +150,12 @@ export default function Home() {
         }
       } catch (err) {
         console.error("Error parsing MQTT message:", err);
+        // Don't set error state for parsing errors - just log
       }
     });
     
     client.on("error", (err) => {
-      console.error("MQTT error:", err);
-      setError(`MQTT connection error: ${err.message}`);
-      setMqttConnected(false);
+      handleMqttError(err, setError, setMqttConnected);
     });
     
     client.on("close", () => {
@@ -178,48 +178,57 @@ export default function Home() {
 
   // Send control commands via MQTT
   const sendControl = async (params) => {
-    if (!mqttClientRef.current || !mqttClientRef.current.connected) {
-      throw new Error("MQTT not connected");
-    }
-    
-    if (!deviceId) {
-      throw new Error("Device ID not available");
-    }
-    
-    const controlTopic = `solar-tracker/${deviceId}/control`;
-    const controlMessage = {};
-    
-    if (params.newPrice !== undefined) {
-      controlMessage.gridPrice = parseFloat(params.newPrice);
-      if (isNaN(controlMessage.gridPrice) || controlMessage.gridPrice <= 0 || controlMessage.gridPrice >= 1000) {
-        throw new Error("Invalid grid price (must be 0 to 1000)");
+    try {
+      if (!mqttClientRef.current || !mqttClientRef.current.connected) {
+        throw new Error("MQTT not connected");
       }
-    }
-    
-    if (params.deviceName !== undefined) {
-      const name = String(params.deviceName).trim();
-      if (name.length > 24) {
-        throw new Error("Device name too long (max 24 characters)");
+      
+      if (!deviceId) {
+        throw new Error("Device ID not available");
       }
-      controlMessage.deviceName = name;
-    }
-    
-    if (Object.keys(controlMessage).length === 0) {
-      throw new Error("No control parameters provided");
-    }
-    
-    const messageStr = JSON.stringify(controlMessage);
-    const result = mqttClientRef.current.publish(controlTopic, messageStr, { qos: 1 }, (err) => {
-      if (err) {
-        console.error("MQTT publish error:", err);
-        throw new Error(`Failed to send control command: ${err.message}`);
-      } else {
-        console.log(`✅ Control command published to ${controlTopic}:`, controlMessage);
+      
+      const controlTopic = `solar-tracker/${deviceId}/control`;
+      const controlMessage = {};
+      
+      if (params.newPrice !== undefined) {
+        controlMessage.gridPrice = parseFloat(params.newPrice);
+        if (isNaN(controlMessage.gridPrice) || controlMessage.gridPrice <= 0 || controlMessage.gridPrice >= 1000) {
+          throw new Error("Invalid grid price (must be 0 to 1000)");
+        }
       }
-    });
-    
-    if (!result) {
-      throw new Error("Failed to publish control command");
+      
+      if (params.deviceName !== undefined) {
+        const name = String(params.deviceName).trim();
+        if (name.length > 24) {
+          throw new Error("Device name too long (max 24 characters)");
+        }
+        controlMessage.deviceName = name;
+      }
+      
+      if (Object.keys(controlMessage).length === 0) {
+        throw new Error("No control parameters provided");
+      }
+      
+      const messageStr = JSON.stringify(controlMessage);
+      
+      // Return a promise that resolves/rejects based on publish callback
+      return new Promise((resolve, reject) => {
+        const result = mqttClientRef.current.publish(controlTopic, messageStr, { qos: 1 }, (err) => {
+          if (err) {
+            reject(new Error(`Failed to send control command: ${err.message}`));
+          } else {
+            console.log(`✅ Control command published to ${controlTopic}:`, controlMessage);
+            resolve();
+          }
+        });
+        
+        if (!result) {
+          reject(new Error("Failed to publish control command"));
+        }
+      });
+    } catch (error) {
+      // Re-throw to be caught by caller
+      throw error;
     }
   };
 
@@ -289,23 +298,13 @@ export default function Home() {
       }
 
       // If Railway API is not configured, show error
-      setHistoryError("Backend API not configured. Please set NEXT_PUBLIC_RAILWAY_API_BASE_URL environment variable.");
+      const errorMsg = "Backend API not configured. Please set NEXT_PUBLIC_RAILWAY_API_BASE_URL environment variable.";
+      handleApiError(new Error(errorMsg), setHistoryError, "load history");
       console.error("Railway API base URL not configured");
-      if (lines.length <= 1) {
-        // Only header, no data
-        setHistoryData(text);
-        console.log("History file has no data rows yet");
-        return;
-      }
-      
-      // Process valid CSV
-      console.log(`History loaded: ${lines.length - 1} data rows`);
-      setHistoryData(text);
-      drawHistoryChart(text);
       
     } catch (e) {
       const errorMsg = e.message || String(e);
-      setHistoryError(`Cannot fetch history: ${errorMsg}`);
+      handleApiError(new Error(errorMsg), setHistoryError, "fetch history");
       console.error("History fetch error:", e);
       console.error("Failed URL:", fetchUrl);
     }
@@ -396,14 +395,18 @@ export default function Home() {
     if (gridPriceDebounceRef.current) {
       clearTimeout(gridPriceDebounceRef.current);
     }
-    gridPriceDebounceRef.current = setTimeout(() => {
-      const price = parseFloat(gridPrice);
-      if (isNaN(price) || price <= 0 || price >= 1000) {
-        alert("Invalid price (must be 0 to 1000)");
-        setGridPrice("12.00");
-        return;
+    gridPriceDebounceRef.current = setTimeout(async () => {
+      try {
+        const price = parseFloat(gridPrice);
+        if (isNaN(price) || price <= 0 || price >= 1000) {
+          setError("Invalid price (must be 0 to 1000)");
+          setGridPrice("12.00");
+          return;
+        }
+        await sendControl({ newPrice: price });
+      } catch (error) {
+        handleControlError(error, setError, "update grid price");
       }
-      sendControl({ newPrice: price });
     }, 2500);
   };
 
@@ -1035,12 +1038,13 @@ export default function Home() {
                       if (deviceNameDebounceRef.current) {
                         clearTimeout(deviceNameDebounceRef.current);
                       }
-                      deviceNameDebounceRef.current = setTimeout(() => {
+                      deviceNameDebounceRef.current = setTimeout(async () => {
                         if (newName.trim().length > 0 && newName.trim().length <= 24) {
-                          sendControl({ deviceName: newName.trim() }).catch((err) => {
-                            console.error("Failed to update device name:", err);
-                            setError(`Failed to update device name: ${err.message}`);
-                          });
+                          try {
+                            await sendControl({ deviceName: newName.trim() });
+                          } catch (error) {
+                            handleControlError(error, setError, "update device name");
+                          }
                         }
                       }, 1000);
                     }}

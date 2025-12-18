@@ -10,14 +10,22 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
-  // Barangay Hidalgo, Tanauan, Batangas admin credentials
-  const VALID_EMAIL = process.env.NEXT_PUBLIC_LOGIN_EMAIL || "admin@barangayhidalgo.gov.ph";
-  const VALID_PASSWORD = process.env.NEXT_PUBLIC_LOGIN_PASSWORD || "solar2024";
+  // Admin credentials - must be set via environment variables
+  // No default values for security
+  const VALID_EMAIL = process.env.NEXT_PUBLIC_LOGIN_EMAIL;
+  const VALID_PASSWORD = process.env.NEXT_PUBLIC_LOGIN_PASSWORD;
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setError("");
     setLoading(true);
+
+    // Check if credentials are configured
+    if (!VALID_EMAIL || !VALID_PASSWORD) {
+      setError("Login system not configured. Please contact administrator.");
+      setLoading(false);
+      return;
+    }
 
     // Email format validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
