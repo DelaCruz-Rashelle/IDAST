@@ -67,7 +67,7 @@ const int relaxRange         = 60;
 bool steadyState = false;
 
 // === Demo Mode ===
-bool demoMode = true;
+bool demoMode = false;  // Set to false to use real sensor data for energy calculations
 int simTop = 0, simLeft = 0, simRight = 0;
 int simTiltAngle = 90;
 int simHErr = 0, simVErr = 0;

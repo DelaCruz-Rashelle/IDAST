@@ -134,6 +134,7 @@ struct ControlPacket {
   void reconnectMqtt();
   void publishTelemetry();
   String getDeviceId();
+  void onMqttMessage(char* topic, byte* payload, unsigned int length);
 
   void onDataSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
     (void)info;
@@ -433,6 +434,7 @@ void reconnectWiFi() {
     
     mqttClient.setServer(brokerHost.c_str(), brokerPort);
     mqttClient.setBufferSize(2048);  // Increase buffer for JSON messages
+    mqttClient.setCallback(onMqttMessage);  // Set callback for incoming messages
     
     Serial.println("\n📡 MQTT Configuration:");
     Serial.printf("   Broker: %s:%d (TLS)\n", brokerHost.c_str(), brokerPort);
@@ -476,6 +478,14 @@ void reconnectWiFi() {
       String statusTopic = "solar-tracker/" + deviceId + "/status";
       String statusMsg = "{\"status\":\"online\",\"timestamp\":" + String(millis()) + "}";
       mqttClient.publish(statusTopic.c_str(), statusMsg.c_str(), true);  // Retained message
+      
+      // Subscribe to control topic
+      String controlTopic = "solar-tracker/" + deviceId + "/control";
+      if (mqttClient.subscribe(controlTopic.c_str(), 1)) {
+        Serial.printf("✅ Subscribed to: %s\n", controlTopic.c_str());
+      } else {
+        Serial.printf("⚠️ Failed to subscribe to: %s\n", controlTopic.c_str());
+      }
     } else {
       Serial.printf(" ❌ Failed, rc=%d\n", mqttClient.state());
       mqttConnected = false;
@@ -823,6 +833,81 @@ void handle_wifi_setup() {
     esp_err_t result = esp_now_send(TRANSMITTER_MAC, (const uint8_t*)&cmd, sizeof(ControlPacket));
     if (result != ESP_OK) {
       Serial.printf("⚠️ Control packet send failed: %d\n", result);
+    } else {
+      Serial.printf("📤 Control packet sent via ESP-NOW: flags=0x%02X\n", cmd.flags);
+    }
+  }
+
+  // MQTT message callback - handles incoming control commands
+  void onMqttMessage(char* topic, byte* payload, unsigned int length) {
+    // Null-terminate the payload
+    char message[256];
+    if (length >= sizeof(message)) length = sizeof(message) - 1;
+    memcpy(message, payload, length);
+    message[length] = '\0';
+    
+    String topicStr = String(topic);
+    String messageStr = String(message);
+    
+    // Only process control topic messages
+    if (!topicStr.endsWith("/control")) {
+      return;
+    }
+    
+    Serial.printf("📥 MQTT control message received: %s\n", messageStr.c_str());
+    
+    // Parse JSON manually (simple parsing for gridPrice and deviceName)
+    // Expected format: {"gridPrice": 12.5, "deviceName": "iPhone 15"}
+    ControlPacket cmd = {};
+    cmd.version = 1;
+    cmd.flags = 0;
+    
+    // Parse gridPrice
+    int gridPriceIdx = messageStr.indexOf("\"gridPrice\"");
+    if (gridPriceIdx >= 0) {
+      int colonIdx = messageStr.indexOf(":", gridPriceIdx);
+      if (colonIdx >= 0) {
+        int endIdx = messageStr.indexOf(",", colonIdx);
+        if (endIdx < 0) endIdx = messageStr.indexOf("}", colonIdx);
+        if (endIdx > colonIdx) {
+          String priceStr = messageStr.substring(colonIdx + 1, endIdx);
+          priceStr.trim();
+          float price = priceStr.toFloat();
+          if (price > 0 && price < 1000) {
+            cmd.gridPrice = price;
+            cmd.flags |= 0x08;  // Set grid price flag
+            Serial.printf("   Grid price: %.2f\n", price);
+          }
+        }
+      }
+    }
+    
+    // Parse deviceName
+    int deviceNameIdx = messageStr.indexOf("\"deviceName\"");
+    if (deviceNameIdx >= 0) {
+      int colonIdx = messageStr.indexOf(":", deviceNameIdx);
+      if (colonIdx >= 0) {
+        int quote1 = messageStr.indexOf("\"", colonIdx);
+        if (quote1 >= 0) {
+          int quote2 = messageStr.indexOf("\"", quote1 + 1);
+          if (quote2 > quote1) {
+            String nameStr = messageStr.substring(quote1 + 1, quote2);
+            nameStr.trim();
+            if (nameStr.length() > 0 && nameStr.length() < 24) {
+              nameStr.toCharArray(cmd.deviceName, sizeof(cmd.deviceName));
+              cmd.flags |= 0x10;  // Set device name flag
+              Serial.printf("   Device name: %s\n", cmd.deviceName);
+            }
+          }
+        }
+      }
+    }
+    
+    // Forward control packet to transmitter via ESP-NOW if any flags are set
+    if (cmd.flags != 0) {
+      sendControlPacket(cmd);
+    } else {
+      Serial.println("⚠️ No valid control parameters found in message");
     }
   }
 

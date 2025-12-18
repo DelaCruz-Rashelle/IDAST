@@ -25,6 +25,7 @@ export default function Home() {
   const [mqttConnected, setMqttConnected] = useState(false);
   const [deviceId, setDeviceId] = useState("");
   const deviceNameInputFocusedRef = useRef(false);
+  const deviceNameDebounceRef = useRef(null);
   const mqttClientRef = useRef(null);
   
   const chartRef = useRef(null);
@@ -136,6 +137,10 @@ export default function Home() {
         
         if (topic.includes("/telemetry")) {
           processTelemetryMessage(json);
+          // Extract device_id from telemetry for control commands
+          if (json.device_id && !deviceId) {
+            setDeviceId(json.device_id);
+          }
         } else if (topic.includes("/status")) {
           console.log("Status update:", json);
           if (json.device_id && !deviceId) {
@@ -171,11 +176,51 @@ export default function Home() {
     };
   }, []);
 
-  // Note: Control commands are no longer supported via MQTT in this version
-  // (User specified no bidirectional control needed)
+  // Send control commands via MQTT
   const sendControl = async (params) => {
-    console.warn("Control commands not supported in MQTT mode");
-    throw new Error("Control commands not available - MQTT mode is read-only");
+    if (!mqttClientRef.current || !mqttClientRef.current.connected) {
+      throw new Error("MQTT not connected");
+    }
+    
+    if (!deviceId) {
+      throw new Error("Device ID not available");
+    }
+    
+    const controlTopic = `solar-tracker/${deviceId}/control`;
+    const controlMessage = {};
+    
+    if (params.newPrice !== undefined) {
+      controlMessage.gridPrice = parseFloat(params.newPrice);
+      if (isNaN(controlMessage.gridPrice) || controlMessage.gridPrice <= 0 || controlMessage.gridPrice >= 1000) {
+        throw new Error("Invalid grid price (must be 0 to 1000)");
+      }
+    }
+    
+    if (params.deviceName !== undefined) {
+      const name = String(params.deviceName).trim();
+      if (name.length > 24) {
+        throw new Error("Device name too long (max 24 characters)");
+      }
+      controlMessage.deviceName = name;
+    }
+    
+    if (Object.keys(controlMessage).length === 0) {
+      throw new Error("No control parameters provided");
+    }
+    
+    const messageStr = JSON.stringify(controlMessage);
+    const result = mqttClientRef.current.publish(controlTopic, messageStr, { qos: 1 }, (err) => {
+      if (err) {
+        console.error("MQTT publish error:", err);
+        throw new Error(`Failed to send control command: ${err.message}`);
+      } else {
+        console.log(`✅ Control command published to ${controlTopic}:`, controlMessage);
+      }
+    });
+    
+    if (!result) {
+      throw new Error("Failed to publish control command");
+    }
   };
 
 
@@ -381,6 +426,7 @@ export default function Home() {
       return () => {
         clearInterval(historyInterval);
         if (gridPriceDebounceRef.current) clearTimeout(gridPriceDebounceRef.current);
+        if (deviceNameDebounceRef.current) clearTimeout(deviceNameDebounceRef.current);
       };
     }
   }, [router]);
@@ -922,7 +968,7 @@ export default function Home() {
               <div className="manual-header">
                 <span className="pill">{manual ? "Manual Control" : "Auto Tracking"}</span>
                 <div style={{ fontSize: "12px", color: "var(--muted)" }}>
-                  Control disabled in MQTT mode
+                  Servo control disabled (read-only mode). Grid price and device name can be edited below.
                 </div>
               </div>
               <div className="controls">
@@ -983,22 +1029,24 @@ export default function Home() {
                       deviceNameInputFocusedRef.current = false;
                     }}
                     onChange={(e) => {
-                      setDeviceName(e.target.value);
+                      const newName = e.target.value;
+                      setDeviceName(newName);
+                      // Debounce device name change
+                      if (deviceNameDebounceRef.current) {
+                        clearTimeout(deviceNameDebounceRef.current);
+                      }
+                      deviceNameDebounceRef.current = setTimeout(() => {
+                        if (newName.trim().length > 0 && newName.trim().length <= 24) {
+                          sendControl({ deviceName: newName.trim() }).catch((err) => {
+                            console.error("Failed to update device name:", err);
+                            setError(`Failed to update device name: ${err.message}`);
+                          });
+                        }
+                      }, 1000);
                     }}
                     placeholder="Enter device name (e.g., iPhone 15)"
-                    maxLength={23}
+                    maxLength={24}
                   />
-                </div>
-                <div style={{ 
-                  padding: "10px", 
-                  background: "rgba(47, 210, 122, 0.1)", 
-                  border: "1px solid rgba(47, 210, 122, 0.3)", 
-                  borderRadius: "8px",
-                  marginBottom: "12px",
-                  fontSize: "12px",
-                  color: "var(--muted)"
-                }}>
-                  Device registration disabled in MQTT mode. Device name is read from telemetry.
                 </div>
                 <div style={{ marginBottom: "12px", fontSize: "13px", color: "var(--ink)" }}>
                   Current Device: <span className="mono" style={{ fontWeight: "600" }}>{currentDevice}</span>
@@ -1011,9 +1059,8 @@ export default function Home() {
                     value={gridPrice}
                     onChange={(e) => {
                       setGridPrice(e.target.value);
+                      handlePriceChange();
                     }}
-                    disabled={true}
-                    style={{ opacity: 0.5 }}
                     placeholder="20.00"
                     step="0.01"
                     min="0"

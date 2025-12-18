@@ -129,6 +129,41 @@ solar-tracker/{device_id}/history
 
 **Note:** This topic is optional. Historical data is primarily stored in the backend MySQL database. This topic can be used for real-time history snapshots if needed.
 
+### 4. Control Topic
+**Topic:** `solar-tracker/{device_id}/control`  
+**QoS:** 1 (At least once delivery)  
+**Retained:** false  
+**Publish Frequency:** On-demand (when user changes settings in dashboard)
+
+**Message Format (JSON):**
+```json
+{
+  "gridPrice": 12.5,
+  "deviceName": "iPhone 15"
+}
+```
+
+**Field Descriptions:**
+- `gridPrice` (optional): Grid electricity price in PHP per kWh (0-1000). Updates the ESP32's stored grid price value.
+- `deviceName` (optional): Device name string (max 24 characters). Updates the current session device name.
+
+**Usage:**
+- Published by frontend dashboard when user changes grid price or device name
+- ESP32 receiver subscribes to this topic and forwards commands to transmitter via ESP-NOW
+- Transmitter processes commands and updates settings in Preferences (grid price) or session variable (device name)
+
+**Example Control Messages:**
+```json
+// Update grid price only
+{"gridPrice": 12.5}
+
+// Update device name only
+{"deviceName": "iPhone 15"}
+
+// Update both
+{"gridPrice": 12.5, "deviceName": "iPhone 15"}
+```
+
 ## Wildcard Subscriptions
 
 ### Subscribe to All Devices
@@ -136,6 +171,7 @@ solar-tracker/{device_id}/history
 solar-tracker/+/telemetry    # All telemetry from all devices
 solar-tracker/+/status       # All status messages from all devices
 solar-tracker/+/history      # All history snapshots from all devices
+solar-tracker/+/control      # All control commands (ESP32 receivers subscribe to their own device ID only)
 ```
 
 ### Subscribe to Specific Device
@@ -143,6 +179,7 @@ solar-tracker/+/history      # All history snapshots from all devices
 solar-tracker/esp32-receiver-A1B2C3/telemetry
 solar-tracker/esp32-receiver-A1B2C3/status
 solar-tracker/esp32-receiver-A1B2C3/history
+solar-tracker/esp32-receiver-A1B2C3/control  # ESP32 receiver subscribes to its own control topic
 ```
 
 ## QoS Levels
@@ -150,6 +187,7 @@ solar-tracker/esp32-receiver-A1B2C3/history
 - **Telemetry (QoS 1):** Critical data that must be delivered at least once. Prevents data loss during network interruptions.
 - **Status (QoS 1):** Important for device monitoring. Retained messages ensure new subscribers know device state immediately.
 - **History (QoS 0):** Non-critical snapshots. Loss is acceptable as primary storage is in database.
+- **Control (QoS 1):** Important for settings updates. Ensures control commands are delivered reliably.
 
 ## Message Size
 
