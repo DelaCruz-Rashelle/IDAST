@@ -8,6 +8,7 @@ export default function WiFiSetup() {
   const router = useRouter();
   const [wifiSSID, setWifiSSID] = useState("");
   const [wifiPassword, setWifiPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [wifiSaving, setWifiSaving] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
@@ -34,15 +35,45 @@ export default function WiFiSetup() {
 
   // Check WiFi status from ESP32 (automatically tries AP mode)
   const checkWiFiStatus = async () => {
-    // Always try AP mode for WiFi configuration
     const apIP = "192.168.4.1";
     setStatus("🔄 Connecting to ESP32...");
     
+    const isHTTPS = typeof window !== "undefined" && window.location.protocol === "https:";
+    
     try {
-      const res = await fetch(`http://${apIP}/data`, {
-        method: "GET",
-        signal: AbortSignal.timeout(5000) // 5 second timeout
-      });
+      let res;
+      
+      if (isHTTPS) {
+        // Try proxy route first (HTTPS → HTTPS, no mixed content)
+        try {
+          const proxyUrl = `/api/proxy?ip=${apIP}&endpoint=/data`;
+          res = await fetch(proxyUrl, {
+            method: "GET",
+            signal: AbortSignal.timeout(5000)
+          });
+          
+          if (!res.ok) {
+            throw new Error("Proxy failed");
+          }
+        } catch (proxyError) {
+          // Proxy failed, try direct connection (user's browser is on local network)
+          try {
+            res = await fetch(`http://${apIP}/data`, {
+              method: "GET",
+              signal: AbortSignal.timeout(5000)
+            });
+          } catch (directError) {
+            // Direct connection also failed
+            throw new Error("Cannot connect to ESP32");
+          }
+        }
+      } else {
+        // HTTP page - direct connection should work
+        res = await fetch(`http://${apIP}/data`, {
+          method: "GET",
+          signal: AbortSignal.timeout(5000)
+        });
+      }
       
       if (res.ok) {
         const json = await res.json();
@@ -74,43 +105,105 @@ export default function WiFiSetup() {
         setStatus("⚠️ Cannot connect to ESP32. Please ensure ESP32 is powered on and your device is connected to ESP32's WiFi network (Solar_Capstone_Admin).");
       }
     } catch (e) {
-      setStatus("⚠️ Cannot connect to ESP32. Please connect your device to ESP32's WiFi network:\nNetwork: Solar_Capstone_Admin\nPassword: 12345678\n\nThen refresh this page.");
+      const errorMsg = e.message || String(e);
+      if (errorMsg.includes("Failed to fetch") || errorMsg.includes("Mixed Content") || errorMsg.includes("Cannot connect")) {
+        setStatus("⚠️ Cannot connect to ESP32. Please ensure:\n• Your device is connected to ESP32's WiFi network (Solar_Capstone_Admin, password: 12345678)\n• ESP32 is powered on\n• If accessing via HTTPS, try accessing this page via HTTP when on ESP32's network");
+      } else {
+        setStatus("⚠️ Cannot connect to ESP32. Please connect your device to ESP32's WiFi network:\nNetwork: Solar_Capstone_Admin\nPassword: 12345678\n\nThen refresh this page.");
+      }
     }
   };
 
-  // Send WiFi configuration (always uses AP mode)
+  // Send WiFi configuration to ESP32
   const sendWifiConfig = async (ssid, password) => {
-    // Always use AP mode for WiFi configuration
     const apIP = "192.168.4.1";
-    const apiUrl = `http://${apIP}`;
     const params = new URLSearchParams({
       wifiSSID: ssid,
       wifiPassword: password || ""
     });
     
-    // Direct connection to ESP32 AP
-    const fetchUrl = `${apiUrl}/wifi-config`;
+    // Try direct connection first (works when user is on ESP32's AP network)
+    // If that fails due to mixed content (HTTPS page → HTTP request), try proxy route
+    const isHTTPS = typeof window !== "undefined" && window.location.protocol === "https:";
     
-    const res = await fetch(fetchUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: params.toString()
-    });
-    
-    if (!res.ok) {
-      const errorText = await res.text();
-      let errorMsg = "WiFi configuration failed";
+    if (isHTTPS) {
+      // Use proxy route to avoid mixed content issues
+      // Note: Proxy route on Vercel can't reach local IPs, but we try it anyway
+      // If it fails, we'll fall back to direct connection with error handling
       try {
-        const errorJson = JSON.parse(errorText);
-        if (errorJson.error) {
-          errorMsg = errorJson.error;
+        const proxyUrl = `/api/proxy?ip=${apIP}&endpoint=/wifi-config`;
+        const res = await fetch(proxyUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString()
+        });
+        
+        if (res.ok) {
+          return res;
         }
-      } catch (e) {
-        if (errorText) errorMsg = errorText;
+        
+        // If proxy fails, try direct connection (user's browser is on local network)
+        const errorText = await res.text();
+        throw new Error(`Proxy failed: ${errorText}`);
+      } catch (proxyError) {
+        // Proxy failed (likely because Vercel server can't reach local IP)
+        // Try direct connection - this will work if user is on ESP32's network
+        // but may fail due to mixed content policy
+        try {
+          const directUrl = `http://${apIP}/wifi-config`;
+          const res = await fetch(directUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: params.toString()
+          });
+          
+          if (res.ok) {
+            return res;
+          }
+          
+          const errorText = await res.text();
+          let errorMsg = "WiFi configuration failed";
+          try {
+            const errorJson = JSON.parse(errorText);
+            if (errorJson.error) {
+              errorMsg = errorJson.error;
+            }
+          } catch (e) {
+            if (errorText) errorMsg = errorText;
+          }
+          throw new Error(errorMsg);
+        } catch (directError) {
+          // Direct connection failed - likely mixed content blocking
+          if (directError.message.includes("Failed to fetch") || directError.message.includes("Mixed Content")) {
+            throw new Error("Cannot connect to ESP32. Please ensure:\n1. Your device is connected to ESP32's WiFi network (Solar_Capstone_Admin)\n2. ESP32 is powered on\n3. If accessing via HTTPS, try accessing this page via HTTP when on ESP32's network");
+          }
+          throw directError;
+        }
       }
-      throw new Error(errorMsg);
+    } else {
+      // HTTP page - direct connection should work
+      const directUrl = `http://${apIP}/wifi-config`;
+      const res = await fetch(directUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString()
+      });
+      
+      if (!res.ok) {
+        const errorText = await res.text();
+        let errorMsg = "WiFi configuration failed";
+        try {
+          const errorJson = JSON.parse(errorText);
+          if (errorJson.error) {
+            errorMsg = errorJson.error;
+          }
+        } catch (e) {
+          if (errorText) errorMsg = errorText;
+        }
+        throw new Error(errorMsg);
+      }
+      return res;
     }
-    return res;
   };
 
   // Handle WiFi configuration save
@@ -175,7 +268,16 @@ export default function WiFiSetup() {
       
     } catch (e) {
       console.error("WiFi config error:", e);
-      setError(`Failed to save WiFi credentials: ${e.message}`);
+      const errorMsg = e.message || String(e);
+      
+      // Provide helpful error messages based on error type
+      if (errorMsg.includes("Cannot connect to ESP32") || errorMsg.includes("Failed to fetch")) {
+        setError("Cannot connect to ESP32. Please ensure:\n1. Your device is connected to ESP32's WiFi network (Solar_Capstone_Admin)\n2. ESP32 is powered on\n3. If accessing via HTTPS, try accessing this page via HTTP when on ESP32's network");
+      } else if (errorMsg.includes("Proxy failed")) {
+        setError("Connection failed. Please ensure:\n1. Your device is connected to ESP32's WiFi network (Solar_Capstone_Admin)\n2. ESP32 is powered on\n3. Try refreshing the page");
+      } else {
+        setError(`Failed to save WiFi credentials: ${errorMsg}`);
+      }
       setStatus("");
     } finally {
       setWifiSaving(false);
@@ -274,15 +376,51 @@ export default function WiFiSetup() {
 
             <div className="form-group">
               <label htmlFor="wifiPassword">WiFi Password</label>
-              <input
-                type="password"
-                id="wifiPassword"
-                value={wifiPassword}
-                onChange={(e) => setWifiPassword(e.target.value)}
-                placeholder="Enter WiFi password (optional for open networks)"
-                maxLength={64}
-                disabled={wifiSaving}
-              />
+              <div style={{ position: "relative" }}>
+                <input
+                  type={showPassword ? "text" : "password"}
+                  id="wifiPassword"
+                  value={wifiPassword}
+                  onChange={(e) => setWifiPassword(e.target.value)}
+                  placeholder="Enter WiFi password (optional for open networks)"
+                  maxLength={64}
+                  disabled={wifiSaving}
+                  style={{ paddingRight: "40px" }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  style={{
+                    position: "absolute",
+                    right: "8px",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "none",
+                    border: "none",
+                    cursor: "pointer",
+                    padding: "4px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "var(--muted)",
+                    opacity: wifiSaving ? 0.5 : 1
+                  }}
+                  disabled={wifiSaving}
+                  title={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? (
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                      <line x1="1" y1="1" x2="23" y2="23"></line>
+                    </svg>
+                  ) : (
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                      <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                  )}
+                </button>
+              </div>
             </div>
 
             <button
