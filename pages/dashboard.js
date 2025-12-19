@@ -4,7 +4,6 @@ import Head from "next/head";
 import Link from "next/link";
 import mqtt from "mqtt";
 import { handleMqttError, handleControlError, handleApiError, formatErrorMessage } from "../utils/errorHandler.js";
-import "../styles/dashboard.css";
 
 const MQTT_BROKER_URL = process.env.NEXT_PUBLIC_MQTT_BROKER_URL || "";
 const MQTT_USERNAME = process.env.NEXT_PUBLIC_MQTT_USERNAME || "";
