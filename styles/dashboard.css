@@ -138,6 +138,15 @@ body {
   flex: 1;
 }
 
+.right-column-container > .card.card-auto-fit {
+  flex: 0 0 auto;
+  height: auto;
+}
+
+.right-column-container > .card.card-auto-fit .content {
+  flex: 0 0 auto;
+}
+
 .card h3 {
   margin: 0;
   padding: 14px 16px;

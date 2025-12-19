@@ -1068,7 +1068,7 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="card">
+            <div className="card card-auto-fit">
               <h3>Batelec Grid Price</h3>
               <div className="content" style={{ padding: "12px 14px" }}>
                 <div className="form-group">
