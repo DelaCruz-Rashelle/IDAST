@@ -517,6 +517,12 @@ export default function Home() {
   const loadGridPrice = async () => {
     if (!RAILWAY_API_BASE_URL) return;
     
+    // Don't load if user is currently typing in the input field
+    if (typeof window !== "undefined" && 
+        (document.activeElement?.id === "gridPrice" || gridPriceInputFocusedRef.current)) {
+      return;
+    }
+    
     try {
       const base = RAILWAY_API_BASE_URL.endsWith("/")
         ? RAILWAY_API_BASE_URL.slice(0, -1)
@@ -524,27 +530,38 @@ export default function Home() {
       const res = await fetch(`${base}/api/grid-price`);
       if (res.ok) {
         const json = await res.json();
-        if (json.price !== null && json.price !== undefined && typeof window !== "undefined" && document.activeElement?.id !== "gridPrice") {
+        // Only update if input is not focused and not already loaded from DB (user might have typed something)
+        if (json.price !== null && json.price !== undefined && 
+            typeof window !== "undefined" && 
+            document.activeElement?.id !== "gridPrice" &&
+            !gridPriceInputFocusedRef.current &&
+            !gridPriceLoadedFromDbRef.current) {
           const price = json.price.toFixed(2);
           setGridPrice(price);
           setSavedGridPrice(parseFloat(price)); // Set saved price for calculations
           gridPriceLoadedFromDbRef.current = true; // Mark that we've loaded from DB
-        } else {
-          // No saved price, leave empty for user to input
-          setGridPrice("");
-          gridPriceLoadedFromDbRef.current = false; // Allow user to input
+        } else if (json.price === null || json.price === undefined) {
+          // No saved price, but only clear if user hasn't typed anything
+          if (!gridPriceInputFocusedRef.current && gridPrice === "") {
+            setGridPrice("");
+            gridPriceLoadedFromDbRef.current = false; // Allow user to input
+          }
         }
       } else {
-        // API call failed or returned no price, leave empty for user to input
-        setGridPrice("");
-        gridPriceLoadedFromDbRef.current = false;
+        // API call failed, but only clear if user hasn't typed anything
+        if (!gridPriceInputFocusedRef.current && gridPrice === "") {
+          setGridPrice("");
+          gridPriceLoadedFromDbRef.current = false;
+        }
       }
     } catch (e) {
       console.error("Failed to load grid price:", e);
       // Don't show error to user for this - it's okay if it fails
-      // Leave empty for user to input
-      setGridPrice("");
-      gridPriceLoadedFromDbRef.current = false;
+      // Only clear if user hasn't typed anything
+      if (!gridPriceInputFocusedRef.current && gridPrice === "") {
+        setGridPrice("");
+        gridPriceLoadedFromDbRef.current = false;
+      }
     }
   };
 
@@ -694,7 +711,7 @@ export default function Home() {
         if (deviceNameDebounceRef.current) clearTimeout(deviceNameDebounceRef.current);
       };
     }
-  }, [router, mqttConnected, data]);
+  }, [router, mqttConnected]); // Removed 'data' dependency to prevent reloading on every telemetry update
 
   useEffect(() => {
     if (typeof window !== "undefined" && chartRef.current) {
