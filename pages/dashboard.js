@@ -682,6 +682,17 @@ export default function Home() {
       await saveGridPrice(price);
       setSavedGridPrice(price); // Mark as saved for calculations
       setError("");
+      
+      // Auto-scroll to Estimated Savings section after saving
+      setTimeout(() => {
+        const estimatedSavingsElement = document.getElementById("estimated-savings-row");
+        if (estimatedSavingsElement) {
+          estimatedSavingsElement.scrollIntoView({ 
+            behavior: "smooth", 
+            block: "center" 
+          });
+        }
+      }, 100); // Small delay to ensure state update is reflected
     } catch (error) {
       handleControlError(error, setError, "save grid price");
     }
@@ -1272,7 +1283,7 @@ export default function Home() {
                         kWh
                       </td>
                     </tr>
-                    <tr>
+                    <tr id="estimated-savings-row">
                       <td>Estimated Savings</td>
                       <td>
                         {savedGridPrice !== null
