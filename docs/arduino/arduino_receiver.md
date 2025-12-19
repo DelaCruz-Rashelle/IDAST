@@ -499,12 +499,21 @@ void reconnectWiFi() {
       String statusMsg = "{\"status\":\"online\",\"timestamp\":" + String(millis()) + "}";
       mqttClient.publish(statusTopic.c_str(), statusMsg.c_str(), true);  // Retained message
       
-      // Subscribe to control topic
+      // Subscribe to control topic (device-specific)
       String controlTopic = "solar-tracker/" + deviceId + "/control";
       if (mqttClient.subscribe(controlTopic.c_str(), 1)) {
         Serial.printf("✅ Subscribed to: %s\n", controlTopic.c_str());
       } else {
         Serial.printf("⚠️ Failed to subscribe to: %s\n", controlTopic.c_str());
+      }
+      
+      // Also subscribe to wildcard topic for WiFi configuration when deviceId is not yet known
+      // This allows the deployed app to send WiFi config even before deviceId is received
+      String wildcardTopic = "solar-tracker/+/control";
+      if (mqttClient.subscribe(wildcardTopic.c_str(), 1)) {
+        Serial.printf("✅ Subscribed to wildcard: %s\n", wildcardTopic.c_str());
+      } else {
+        Serial.printf("⚠️ Failed to subscribe to wildcard: %s\n", wildcardTopic.c_str());
       }
     } else {
       Serial.printf(" ❌ Failed, rc=%d\n", mqttClient.state());
