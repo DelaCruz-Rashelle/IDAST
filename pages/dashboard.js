@@ -42,8 +42,10 @@ export default function Home() {
   const [isWaitingForReconnection, setIsWaitingForReconnection] = useState(false);
   const [reconnectionStartTime, setReconnectionStartTime] = useState(null);
   const [lastTelemetryTime, setLastTelemetryTime] = useState(null);
-  const [showDashboard, setShowDashboard] = useState(true);
+  const [showDashboard, setShowDashboard] = useState(false); // Start hidden, show after WiFi check
   const [savingWifiSSID, setSavingWifiSSID] = useState(""); // Store SSID being saved for loading screen
+  const [needsWifiConfig, setNeedsWifiConfig] = useState(false); // Track if WiFi configuration is needed
+  const [hasCheckedWifiStatus, setHasCheckedWifiStatus] = useState(false); // Track if we've checked WiFi status
   
   const chartRef = useRef(null);
   const historyChartRef = useRef(null);
@@ -63,16 +65,6 @@ export default function Home() {
     // Update last telemetry time - data is available
     setLastTelemetryTime(Date.now());
     
-    // If we're waiting for reconnection and data is coming, mark as ready
-    if (isWaitingForReconnection && json.wifiConnected) {
-      // Data is flowing and WiFi is connected - ready to show dashboard
-      setTimeout(() => {
-        setIsWaitingForReconnection(false);
-        setShowDashboard(true);
-        setWifiConfigStatus("success: ESP32 reconnected successfully! Dashboard is ready.");
-      }, 2000); // Small delay to ensure stable connection
-    }
-    
     if (json.device_id) {
       setDeviceId(json.device_id);
     }
@@ -83,6 +75,31 @@ export default function Home() {
     }
     if (json.wifiConnected !== undefined) {
       setWifiConnected(json.wifiConnected);
+      
+      // Check WiFi status on first telemetry after login
+      if (!hasCheckedWifiStatus) {
+        setHasCheckedWifiStatus(true);
+        if (!json.wifiConnected) {
+          // WiFi is not connected - show WiFi config UI
+          setNeedsWifiConfig(true);
+          setShowDashboard(false);
+        } else {
+          // WiFi is connected - ready to show dashboard
+          setNeedsWifiConfig(false);
+          setShowDashboard(true);
+        }
+      }
+    }
+    
+    // If we're waiting for reconnection and data is coming, mark as ready
+    if (isWaitingForReconnection && json.wifiConnected) {
+      // Data is flowing and WiFi is connected - ready to show dashboard
+      setTimeout(() => {
+        setIsWaitingForReconnection(false);
+        setNeedsWifiConfig(false);
+        setShowDashboard(true);
+        setWifiConfigStatus("success: ESP32 reconnected successfully! Dashboard is ready.");
+      }, 2000); // Small delay to ensure stable connection
     }
     
     if (json.manual !== undefined) setManual(json.manual);
@@ -336,17 +353,19 @@ export default function Home() {
       await sendWifiConfig(newWifiSSID.trim(), newWifiPassword);
       setWifiConfigStatus("success: WiFi credentials sent! Waiting for ESP32 to reconnect...");
       
-      // Start waiting for reconnection
+      // Start waiting for reconnection - NOW show loading screen
       const savedSSID = newWifiSSID.trim();
       setIsWaitingForReconnection(true);
       setReconnectionStartTime(Date.now());
       setSavingWifiSSID(savedSSID); // Store for loading screen display
+      setNeedsWifiConfig(false); // Hide WiFi config UI
       setShowDashboard(false); // Hide dashboard while reconnecting
       setNewWifiSSID("");
       setNewWifiPassword("");
       
       // Reset last telemetry time to detect when new data arrives
       setLastTelemetryTime(null);
+      setHasCheckedWifiStatus(false); // Reset to check status again after reconnection
       
     } catch (error) {
       setWifiConfigStatus(`error: ${error.message}`);
@@ -638,13 +657,33 @@ export default function Home() {
       loadDeviceName();
       loadGridPrice();
       const historyInterval = setInterval(loadHistory, 30000);
+      
+      // Check if we need WiFi config after MQTT connects (timeout if no telemetry)
+      if (mqttConnected && !hasCheckedWifiStatus) {
+        const wifiCheckTimeout = setTimeout(() => {
+          // If MQTT is connected but no telemetry after 10 seconds, ESP32 likely not connected to WiFi
+          if (!hasCheckedWifiStatus && !data) {
+            setHasCheckedWifiStatus(true);
+            setNeedsWifiConfig(true);
+            setShowDashboard(false);
+          }
+        }, 10000); // 10 second timeout
+        
+        return () => {
+          clearInterval(historyInterval);
+          clearTimeout(wifiCheckTimeout);
+          if (gridPriceDebounceRef.current) clearTimeout(gridPriceDebounceRef.current);
+          if (deviceNameDebounceRef.current) clearTimeout(deviceNameDebounceRef.current);
+        };
+      }
+      
       return () => {
         clearInterval(historyInterval);
         if (gridPriceDebounceRef.current) clearTimeout(gridPriceDebounceRef.current);
         if (deviceNameDebounceRef.current) clearTimeout(deviceNameDebounceRef.current);
       };
     }
-  }, [router]);
+  }, [router, mqttConnected, hasCheckedWifiStatus, data]);
 
   // Monitor WiFi reconnection status
   useEffect(() => {
@@ -693,15 +732,23 @@ export default function Home() {
     // 1. We have data from ESP32
     // 2. MQTT is connected
     // 3. We're not waiting for WiFi reconnection
-    if (data && mqttConnected && !isWaitingForReconnection) {
-      setShowDashboard(true);
+    // 4. WiFi is connected (or we haven't checked yet)
+    // 5. We don't need WiFi configuration
+    if (data && mqttConnected && !isWaitingForReconnection && !needsWifiConfig) {
+      // Only show if WiFi is connected (or we haven't received WiFi status yet)
+      if (hasCheckedWifiStatus && wifiConnected) {
+        setShowDashboard(true);
+      } else if (!hasCheckedWifiStatus) {
+        // Haven't checked yet, wait for telemetry
+        setShowDashboard(false);
+      }
     } else if (!mqttConnected || !data) {
-      // Hide dashboard if no connection or no data (only on initial load)
+      // Hide dashboard if no connection or no data
       if (!isWaitingForReconnection) {
         setShowDashboard(false);
       }
     }
-  }, [data, mqttConnected, isWaitingForReconnection]);
+  }, [data, mqttConnected, isWaitingForReconnection, needsWifiConfig, hasCheckedWifiStatus, wifiConnected]);
 
   useEffect(() => {
     if (typeof window !== "undefined" && chartRef.current) {
@@ -1129,15 +1176,121 @@ export default function Home() {
         <meta name="viewport" content="width=device-width,initial-scale=1" />
       </Head>
       
-      {/* Loading Screen - Show when waiting for reconnection or no data */}
-      {(!showDashboard || isWaitingForReconnection) && (
+      {/* WiFi Configuration Screen - Show if WiFi is not connected, we've checked status, and MQTT is connected */}
+      {needsWifiConfig && !isWaitingForReconnection && mqttConnected && hasCheckedWifiStatus && (
+        <div className="wrap" style={{ maxWidth: '500px', margin: '50px auto' }}>
+          <div style={{ 
+            background: '#121a33', 
+            borderRadius: '14px', 
+            border: '1px solid #1b2547',
+            padding: '30px'
+          }}>
+            <h2 style={{ color: '#2fd27a', marginBottom: '10px', fontSize: '24px', textAlign: 'center' }}>
+              WiFi Configuration Required
+            </h2>
+            <p style={{ color: '#9fb3d1', marginBottom: '25px', textAlign: 'center', fontSize: '14px' }}>
+              ESP32 is not connected to WiFi. Please configure WiFi credentials to continue.
+            </p>
+            
+            {/* WiFi Configuration Form */}
+            <div style={{ marginBottom: '15px' }}>
+              <label style={{ display: 'block', color: '#e6f0ff', marginBottom: '5px', fontSize: '13px', fontWeight: '500' }}>
+                WiFi Network Name (SSID) *
+              </label>
+              <input
+                type="text"
+                value={newWifiSSID}
+                onChange={(e) => setNewWifiSSID(e.target.value)}
+                placeholder="Enter WiFi network name"
+                maxLength={32}
+                style={{
+                  width: '100%',
+                  padding: '12px',
+                  background: '#1b2547',
+                  border: '1px solid #2a3a5c',
+                  borderRadius: '6px',
+                  color: '#e6f0ff',
+                  fontSize: '14px',
+                  boxSizing: 'border-box'
+                }}
+              />
+            </div>
+            
+            <div style={{ marginBottom: '15px' }}>
+              <label style={{ display: 'block', color: '#e6f0ff', marginBottom: '5px', fontSize: '13px', fontWeight: '500' }}>
+                WiFi Password
+              </label>
+              <input
+                type="password"
+                value={newWifiPassword}
+                onChange={(e) => setNewWifiPassword(e.target.value)}
+                placeholder="Enter WiFi password (if required)"
+                maxLength={64}
+                style={{
+                  width: '100%',
+                  padding: '12px',
+                  background: '#1b2547',
+                  border: '1px solid #2a3a5c',
+                  borderRadius: '6px',
+                  color: '#e6f0ff',
+                  fontSize: '14px',
+                  boxSizing: 'border-box'
+                }}
+              />
+            </div>
+            
+            {wifiConfigStatus && (
+              <div style={{
+                padding: '10px',
+                marginBottom: '15px',
+                borderRadius: '6px',
+                background: wifiConfigStatus.startsWith('error') ? 'rgba(245, 179, 66, 0.1)' : 
+                            wifiConfigStatus.startsWith('success') ? 'rgba(47, 210, 122, 0.1)' : 
+                            wifiConfigStatus.startsWith('warning') ? 'rgba(245, 179, 66, 0.1)' :
+                            'rgba(47, 210, 122, 0.1)',
+                border: `1px solid ${wifiConfigStatus.startsWith('error') ? 'rgba(245, 179, 66, 0.3)' : 
+                                wifiConfigStatus.startsWith('success') ? 'rgba(47, 210, 122, 0.3)' : 
+                                wifiConfigStatus.startsWith('warning') ? 'rgba(245, 179, 66, 0.3)' :
+                                'rgba(47, 210, 122, 0.3)'}`,
+                color: wifiConfigStatus.startsWith('error') || wifiConfigStatus.startsWith('warning') ? '#f5b342' : '#2fd27a',
+                fontSize: '13px',
+                lineHeight: '1.5'
+              }}>
+                {wifiConfigStatus.replace(/^(error|success|warning|saving):\s*/, '')}
+              </div>
+            )}
+            
+            <button
+              onClick={handleSaveWifi}
+              disabled={!newWifiSSID.trim() || wifiConfigStatus === 'saving...'}
+              style={{
+                width: '100%',
+                padding: '14px',
+                background: newWifiSSID.trim() && wifiConfigStatus !== 'saving...' ? '#2fd27a' : '#1b2547',
+                color: newWifiSSID.trim() && wifiConfigStatus !== 'saving...' ? '#0b1020' : '#9fb3d1',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: newWifiSSID.trim() && wifiConfigStatus !== 'saving...' ? 'pointer' : 'not-allowed',
+                fontWeight: '600',
+                fontSize: '16px',
+                marginTop: '10px'
+              }}
+            >
+              {wifiConfigStatus === 'saving...' ? 'Saving...' : 'Save & Connect'}
+            </button>
+          </div>
+        </div>
+      )}
+      
+      {/* Loading Screen - Show when waiting for reconnection or connecting */}
+      {(!showDashboard || isWaitingForReconnection) && !needsWifiConfig && (
         <LoadingScreen
           message={
             isWaitingForReconnection 
               ? "ESP32 is reconnecting to WiFi..."
               : !mqttConnected
               ? "Connecting to MQTT broker..."
-              : !data
+              : !data || !hasCheckedWifiStatus
               ? "Waiting for device data..."
               : "Loading dashboard..."
           }
@@ -1146,7 +1299,7 @@ export default function Home() {
               ? `WiFi credentials sent. ESP32 is connecting to "${savingWifiSSID || wifiSSID}"...`
               : !mqttConnected
               ? "Establishing MQTT connection..."
-              : !data
+              : !data || !hasCheckedWifiStatus
               ? "Waiting for telemetry data from ESP32..."
               : null
           }
@@ -1155,7 +1308,7 @@ export default function Home() {
       )}
       
       {/* Main Dashboard - Only show when ready */}
-      {showDashboard && !isWaitingForReconnection && (
+      {showDashboard && !isWaitingForReconnection && !needsWifiConfig && (
       <div className="wrap">
         <div className="header">
           <div className="header-left">
