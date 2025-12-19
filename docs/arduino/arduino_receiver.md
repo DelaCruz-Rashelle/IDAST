@@ -17,7 +17,7 @@
  *  • Host minimal web interface for WiFi configuration (AP mode - initial setup only)
  *
  * Update TRANSMITTER_MAC with the actual transmitter MAC before deployment.
- * WiFi credentials are configured via the deployed app (MQTT) or AP mode for initial setup.
+ * WiFi credentials are configured via AP mode web interface (http://192.168.4.1/wifi-setup).
  * MQTT credentials are configured via Preferences (set via serial or web interface).
  */
 
@@ -181,7 +181,7 @@ struct ControlPacket {
     if (!wifiConfigured) {
       Serial.println("\n📶 No WiFi credentials configured.");
       Serial.println("   Device will operate in AP mode only.");
-      Serial.println("   Configure WiFi via deployed app (MQTT) or connect to AP for initial setup.");
+      Serial.println("   Connect to AP network and visit http://192.168.4.1/wifi-setup to configure WiFi.");
       return;
     }
     
@@ -214,13 +214,14 @@ struct ControlPacket {
       Serial.println("   ⚠️ Target SSID not found in scan!");
       Serial.println("   The stored WiFi network is not available.");
       Serial.println("   Device will fall back to AP mode.");
-      Serial.println("   Configure new WiFi via deployed app (MQTT) when ESP32 reconnects.");
-      
-      // Keep AP+STA mode (AP is already active from initEspNow)
-      // This allows MQTT connection attempts even when no WiFi Station is configured
+      Serial.println();
+      Serial.println("   📡 To configure WiFi:");
+      Serial.println("   1. Connect to WiFi network: " + String(AP_SSID));
+      Serial.println("   2. Password: " + String(AP_PASSWORD));
+      Serial.println("   3. Open browser and visit: http://192.168.4.1/wifi-setup");
+      Serial.println("   4. Enter your WiFi credentials and click 'Save & Connect'");
+      Serial.println();
       Serial.printf("   AP IP: %s\n", WiFi.softAPIP().toString().c_str());
-      Serial.println("   Waiting for WiFi configuration via deployed app (MQTT)...");
-      Serial.println("   Note: Connect a device to this AP and enable internet sharing to allow MQTT connection.");
       return;  // Skip connection attempt since network is not available
     }
     
@@ -254,10 +255,8 @@ struct ControlPacket {
       WiFi.mode(WIFI_STA);
       Serial.println("✅ AP mode disabled - device running in STA mode only");
       
-      // Initialize MQTT after WiFi connection (if not already initialized)
-      if (!mqttClient.connected()) {
-        initMqtt();
-      }
+      // Initialize MQTT after WiFi connection
+      initMqtt();
     } else {
       Serial.printf("❌ WiFi Station connection failed! Status code: %d\n", WiFi.status());
       Serial.println("   Possible reasons:");
@@ -265,12 +264,14 @@ struct ControlPacket {
       Serial.println("   - Network security type not supported");
       Serial.println("   - Network temporarily unavailable");
       Serial.println("   Device will continue in AP mode only");
-      Serial.println("   Update WiFi credentials via deployed app (MQTT) when ESP32 reconnects.");
-      // Keep AP+STA mode to allow MQTT connection attempts
-      // (AP mode is already active from initEspNow)
+      Serial.println();
+      Serial.println("   📡 To configure WiFi:");
+      Serial.println("   1. Connect to WiFi network: " + String(AP_SSID));
+      Serial.println("   2. Password: " + String(AP_PASSWORD));
+      Serial.println("   3. Open browser and visit: http://192.168.4.1/wifi-setup");
+      Serial.println("   4. Enter your WiFi credentials and click 'Save & Connect'");
+      Serial.println();
       Serial.printf("   AP IP: %s\n", WiFi.softAPIP().toString().c_str());
-      Serial.println("   Waiting for WiFi configuration via deployed app (MQTT)...");
-      Serial.println("   Note: Connect a device to this AP and enable internet sharing to allow MQTT connection.");
     }
   }
 
@@ -289,25 +290,20 @@ void reconnectWiFi() {
 }
 
   void initEspNow() {
-    // Start in AP+STA mode to allow both AP and Station connections
-    // This enables MQTT connection even when in AP mode (if internet is available)
-    WiFi.mode(WIFI_AP_STA);
+    // Start in AP mode for initial WiFi configuration
+    WiFi.mode(WIFI_AP);
     WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
     Serial.printf("📡 Receiver AP MAC: %s | channel: %u\n",
                   WiFi.softAPmacAddress().c_str(),
                   WIFI_CHANNEL);
-    Serial.println("📡 Access Point started (for initial setup if needed)");
+    Serial.println("📡 Access Point started");
     Serial.printf("   SSID: %s\n", AP_SSID);
+    Serial.printf("   Password: %s\n", AP_PASSWORD);
     Serial.printf("   IP: %s\n", WiFi.softAPIP().toString().c_str());
-    Serial.println("   WiFi configuration should be done via deployed app (MQTT)");
+    Serial.println("   Connect to this network and visit http://192.168.4.1/wifi-setup to configure WiFi");
     
     // Then try to connect to WiFi Station (if configured)
     initWiFiStation();
-    
-    // Try to initialize MQTT even if only AP mode is active
-    // This allows receiving WiFi config via MQTT when in AP mode
-    // (if the connected device shares internet)
-    initMqtt();
     
     if (esp_now_init() != ESP_OK) {
       Serial.println("❌ ESP-NOW init failed");
@@ -472,21 +468,8 @@ void reconnectWiFi() {
   }
 
   void reconnectMqtt() {
-    // Allow MQTT connection attempt even in AP mode
-    // This enables WiFi config via MQTT when ESP32 is in AP mode
-    // (if the connected device shares internet through the AP)
-    // However, if WiFi Station is connected, prefer that
-    bool hasInternet = false;
-    if (WiFi.status() == WL_CONNECTED) {
-      hasInternet = true;
-    } else if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
-      // In AP mode, try to connect anyway (might have internet via connected device)
-      // This allows receiving WiFi config via MQTT even when in AP mode
-      hasInternet = true;  // Attempt connection - will fail gracefully if no internet
-    }
-    
-    if (!hasInternet) {
-      return;  // No WiFi interface available
+    if (WiFi.status() != WL_CONNECTED) {
+      return;  // Can't connect to MQTT without WiFi Station connection
     }
     
     if (mqttClient.connected()) {
@@ -530,8 +513,7 @@ void reconnectWiFi() {
         Serial.printf("⚠️ Failed to subscribe to: %s\n", controlTopic.c_str());
       }
       
-      // Also subscribe to wildcard topic for WiFi configuration when deviceId is not yet known
-      // This allows the deployed app to send WiFi config even before deviceId is received
+      // Also subscribe to wildcard topic for control commands
       String wildcardTopic = "solar-tracker/+/control";
       if (mqttClient.subscribe(wildcardTopic.c_str(), 1)) {
         Serial.printf("✅ Subscribed to wildcard: %s\n", wildcardTopic.c_str());
@@ -909,61 +891,6 @@ void handle_wifi_setup() {
     Serial.printf("📥 MQTT control message received on topic: %s\n", topicStr.c_str());
     Serial.printf("   Message: %s\n", messageStr.c_str());
     
-    // Parse WiFi configuration first (before other commands)
-    // Expected format: {"wifiSSID": "MyNetwork", "wifiPassword": "password"}
-    int wifiSSIDIdx = messageStr.indexOf("\"wifiSSID\"");
-    if (wifiSSIDIdx >= 0) {
-      int colonIdx = messageStr.indexOf(":", wifiSSIDIdx);
-      if (colonIdx >= 0) {
-        int quote1 = messageStr.indexOf("\"", colonIdx);
-        if (quote1 >= 0) {
-          int quote2 = messageStr.indexOf("\"", quote1 + 1);
-          if (quote2 > quote1) {
-            String ssidStr = messageStr.substring(quote1 + 1, quote2);
-            ssidStr.trim();
-            if (ssidStr.length() > 0 && ssidStr.length() <= 32) {
-              // Parse wifiPassword (optional)
-              String pwdStr = "";
-              int wifiPwdIdx = messageStr.indexOf("\"wifiPassword\"");
-              if (wifiPwdIdx >= 0) {
-                int pwdColonIdx = messageStr.indexOf(":", wifiPwdIdx);
-                if (pwdColonIdx >= 0) {
-                  int pwdQuote1 = messageStr.indexOf("\"", pwdColonIdx);
-                  if (pwdQuote1 >= 0) {
-                    int pwdQuote2 = messageStr.indexOf("\"", pwdQuote1 + 1);
-                    if (pwdQuote2 > pwdQuote1) {
-                      pwdStr = messageStr.substring(pwdQuote1 + 1, pwdQuote2);
-                    }
-                  }
-                }
-              }
-              
-              // Save WiFi credentials
-              settings.begin("solar_rx", false);
-              settings.putString("wifiSSID", ssidStr);
-              settings.putString("wifiPassword", pwdStr);
-              settings.end();
-              
-              Serial.println("\n✅ WiFi credentials received via MQTT:");
-              Serial.printf("   SSID: %s\n", ssidStr.c_str());
-              Serial.println("   Password: [hidden]");
-              
-              // Update global variables
-              wifiSSID = ssidStr;
-              wifiPassword = pwdStr;
-              wifiConfigured = true;
-              
-              // Reconnect WiFi with new credentials
-              reconnectWiFi();
-              
-              // Return early - WiFi reconnection will handle the rest
-              return;
-            }
-          }
-        }
-      }
-    }
-    
     // Parse JSON manually (simple parsing for gridPrice and deviceName)
     // Expected format: {"gridPrice": 12.5, "deviceName": "iPhone 15"}
     ControlPacket cmd = {};
@@ -1053,13 +980,18 @@ void handle_wifi_setup() {
       Serial.print("   IP: ");
       Serial.println(WiFi.localIP());
       Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      Serial.println("   Configure WiFi via deployed app (MQTT)");
     } else {
       Serial.println("\n📡 Access Point Mode:");
-      Serial.print("   http://");
+      Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      Serial.println("   To configure WiFi:");
+      Serial.println("   1. Connect to WiFi network: " + String(AP_SSID));
+      Serial.println("   2. Password: " + String(AP_PASSWORD));
+      Serial.println("   3. Open browser and visit:");
+      Serial.print("      http://");
       Serial.println(WiFi.softAPIP());
-      Serial.println("   WiFi configuration should be done via deployed app (MQTT)");
-      Serial.println("   AP mode is available for initial setup if needed");
+      Serial.println("      Or visit: http://192.168.4.1/wifi-setup");
+      Serial.println("   4. Enter your WiFi credentials and click 'Save & Connect'");
+      Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     }
   }
 
