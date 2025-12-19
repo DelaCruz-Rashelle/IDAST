@@ -79,14 +79,18 @@ export default function Home() {
       setCurrentDevice(json.deviceName);
       setDeviceName(json.deviceName);
     }
-    // Only update grid price from telemetry if:
-    // 1. Input is not focused
-    // 2. We haven't loaded a price from the database yet (to preserve user's saved value)
+    // Never update grid price from telemetry once it's been loaded from DB or saved
+    // This prevents telemetry from overwriting user input or saved values
+    // Only allow telemetry update on initial load if no value exists
     if (json.gridPrice && typeof window !== "undefined" && 
         document.activeElement?.id !== "gridPrice" && 
         !gridPriceInputFocusedRef.current &&
         !gridPriceLoadedFromDbRef.current) {
-      setGridPrice(json.gridPrice.toFixed(2));
+      // Only set from telemetry if we haven't loaded from DB and input is empty
+      // This is just for initial state, user input always takes precedence
+      if (gridPrice === "" || gridPrice === null || gridPrice === undefined) {
+        setGridPrice(json.gridPrice.toFixed(2));
+      }
     }
     if (!sliderActive.tilt && json.tiltAngle !== undefined) {
       setTiltValue(json.tiltAngle);
@@ -537,6 +541,10 @@ export default function Home() {
           setGridPrice(price);
           setSavedGridPrice(parseFloat(price)); // Set saved price for calculations
           gridPriceLoadedFromDbRef.current = true; // Mark that we've loaded from DB
+        } else {
+          // No saved price, leave empty for user to input
+          setGridPrice("");
+          gridPriceLoadedFromDbRef.current = false; // Allow user to input
         }
       }
     } catch (e) {
@@ -1110,20 +1118,28 @@ export default function Home() {
                     <input
                       type="number"
                       id="gridPrice"
-                      value={gridPrice}
-                      onFocus={() => { gridPriceInputFocusedRef.current = true; }}
+                      value={gridPrice || ""}
+                      onFocus={() => { 
+                        gridPriceInputFocusedRef.current = true; 
+                      }}
                       onBlur={() => {
                         gridPriceInputFocusedRef.current = false;
                       }}
                       onChange={(e) => {
-                        setGridPrice(e.target.value);
+                        // Prevent telemetry from interfering while user is typing
+                        const newValue = e.target.value;
+                        setGridPrice(newValue);
+                        // Mark that user is actively editing, so telemetry won't overwrite
+                        if (newValue !== "") {
+                          gridPriceLoadedFromDbRef.current = true;
+                        }
                       }}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           handleSaveGridPrice();
                         }
                       }}
-                      placeholder="20.00"
+                      placeholder="Enter price (e.g., 20.00)"
                       step="0.01"
                       min="0"
                       max="1000"
