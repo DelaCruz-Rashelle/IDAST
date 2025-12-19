@@ -143,12 +143,21 @@ export default function Home() {
       return;
     }
     
-    const clientId = `idast-dashboard-${Date.now()}`;
+    // Use a stable client ID that persists across reconnects
+    // Store it in sessionStorage to maintain consistency
+    let clientId = sessionStorage.getItem('mqtt_client_id');
+    if (!clientId) {
+      clientId = `idast-dashboard-${Math.random().toString(36).substring(2, 15)}`;
+      sessionStorage.setItem('mqtt_client_id', clientId);
+    }
+    
     const connectOptions = {
       clientId,
       clean: true,
       reconnectPeriod: 5000,
       connectTimeout: 10000,
+      keepalive: 60, // Send ping every 60 seconds
+      reschedulePings: true, // Reschedule pings if connection is busy
     };
     
     if (MQTT_USERNAME && MQTT_PASSWORD) {
@@ -157,6 +166,22 @@ export default function Home() {
     }
     
     console.log("Connecting to MQTT broker:", MQTT_BROKER_URL);
+    
+    // Prevent multiple connections
+    if (mqttClientRef.current && mqttClientRef.current.connected) {
+      console.log("MQTT already connected, skipping new connection");
+      return;
+    }
+    
+    // Clean up any existing connection first
+    if (mqttClientRef.current) {
+      try {
+        mqttClientRef.current.end(true); // Force disconnect
+      } catch (e) {
+        console.log("Error closing existing connection:", e);
+      }
+    }
+    
     const client = mqtt.connect(MQTT_BROKER_URL, connectOptions);
     mqttClientRef.current = client;
     
@@ -210,6 +235,7 @@ export default function Home() {
     });
     
     client.on("error", (err) => {
+      console.error("MQTT error:", err);
       handleMqttError(err, setError, setMqttConnected);
     });
     
@@ -223,13 +249,24 @@ export default function Home() {
       setMqttConnected(false);
     });
     
+    client.on("offline", () => {
+      console.log("MQTT offline");
+      setMqttConnected(false);
+    });
+    
     // Cleanup on unmount
     return () => {
-      if (client) {
-        client.end();
+      if (mqttClientRef.current) {
+        console.log("Cleaning up MQTT connection");
+        try {
+          mqttClientRef.current.end(true);
+        } catch (e) {
+          console.log("Error during cleanup:", e);
+        }
+        mqttClientRef.current = null;
       }
     };
-  }, []);
+  }, []); // Empty dependency array - only run once on mount
 
   // Send control commands via MQTT
   const sendControl = async (params) => {
