@@ -4,6 +4,7 @@ import Head from "next/head";
 import Link from "next/link";
 import mqtt from "mqtt";
 import { handleMqttError, handleControlError, handleApiError, formatErrorMessage } from "../utils/errorHandler.js";
+import "../styles/dashboard.css";
 
 const MQTT_BROKER_URL = process.env.NEXT_PUBLIC_MQTT_BROKER_URL || "";
 const MQTT_USERNAME = process.env.NEXT_PUBLIC_MQTT_USERNAME || "";
@@ -852,67 +853,23 @@ export default function Home() {
   // Loading screen component
   const LoadingScreen = ({ message, progress, isWaiting }) => {
     return (
-      <div style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        background: '#0b1020',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 9999,
-        color: '#e6f0ff'
-      }}>
-        <div style={{
-          textAlign: 'center',
-          maxWidth: '400px',
-          padding: '40px'
-        }}>
+      <div className="loading-screen">
+        <div className="loading-screen-content">
           {/* Animated spinner */}
-          <div style={{
-            width: '60px',
-            height: '60px',
-            border: '4px solid #2a3a5c',
-            borderTop: '4px solid #2fd27a',
-            borderRadius: '50%',
-            margin: '0 auto 30px',
-            animation: 'spin 1s linear infinite'
-          }} />
+          <div className="loading-spinner" />
           
-          <style jsx>{`
-            @keyframes spin {
-              0% { transform: rotate(0deg); }
-              100% { transform: rotate(360deg); }
-            }
-          `}</style>
-          
-          <h2 style={{ color: '#2fd27a', marginBottom: '15px', fontSize: '24px' }}>
+          <h2 className="loading-title">
             {message || 'Connecting...'}
           </h2>
           
           {progress && (
-            <div style={{
-              marginTop: '20px',
-              background: '#1b2547',
-              borderRadius: '8px',
-              padding: '15px',
-              fontSize: '14px',
-              color: '#9fb3d1',
-              lineHeight: '1.6'
-            }}>
+            <div className="loading-progress">
               {progress}
             </div>
           )}
           
           {isWaiting && (
-            <div style={{
-              marginTop: '20px',
-              fontSize: '12px',
-              color: '#9fb3d1'
-            }}>
+            <div className="loading-waiting">
               This may take 10-30 seconds...
             </div>
           )}
@@ -1000,171 +957,6 @@ export default function Home() {
             </div>
           </div>
         </div>
-        <style jsx global>{`
-          :root {
-            --bg: #0b1020;
-            --card: #121a33;
-            --ink: #e6f0ff;
-            --muted: #9fb3d1;
-            --accent: #2fd27a;
-            --warn: #f5b342;
-            --err: #ff6b6b;
-            --grid: #1b2547;
-          }
-          body {
-            margin: 0;
-            font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-            background: radial-gradient(1200px 600px at 20% -10%, #18306400, #18306488), var(--bg);
-            color: var(--ink);
-          }
-          .setup-page-wrap {
-            min-height: 100vh;
-            background: radial-gradient(1200px 600px at 20% -10%, #18306400, #18306488), var(--bg);
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            overflow-y: auto;
-          }
-          .setup-overlay {
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 40px 20px;
-            position: relative;
-          }
-          .setup-overlay::before {
-            content: '';
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: 
-              radial-gradient(circle at 20% 30%, rgba(24, 48, 100, 0.3) 0%, transparent 50%),
-              radial-gradient(circle at 80% 70%, rgba(47, 210, 122, 0.1) 0%, transparent 50%),
-              var(--bg);
-            backdrop-filter: blur(20px);
-            z-index: -1;
-          }
-          .setup-card {
-            max-width: 500px;
-            width: 100%;
-            background: linear-gradient(180deg, rgba(16, 23, 52, 0.95), rgba(13, 20, 43, 0.95));
-            backdrop-filter: blur(20px);
-            border: 1px solid var(--grid);
-            border-radius: 14px;
-            padding: 40px 32px;
-            box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(148, 163, 184, 0.1);
-            position: relative;
-            z-index: 1;
-          }
-          .setup-header {
-            text-align: center;
-            margin-bottom: 32px;
-          }
-          .setup-header .sun {
-            width: 32px;
-            height: 32px;
-            background: linear-gradient(180deg, #ffd24d, #ff9a3c);
-            border-radius: 50%;
-            box-shadow: 0 0 32px #ffb347a0;
-            margin: 0 auto 20px;
-          }
-          .setup-title {
-            font-size: 28px;
-            font-weight: 700;
-            margin: 0 0 12px 0;
-            color: #e6f0ff;
-            letter-spacing: 0.2px;
-          }
-          .setup-subtitle {
-            font-size: 14px;
-            color: #9fb3d1;
-            line-height: 1.6;
-            margin: 0;
-          }
-          .setup-content {
-            margin-top: 0;
-          }
-          .setup-form-group {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            margin-bottom: 24px;
-          }
-          .setup-label {
-            font-size: 12px;
-            color: #9fb3d1;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.4px;
-            margin-bottom: 2px;
-          }
-          .setup-input {
-            background: rgba(14, 24, 51, 0.8);
-            border: 1px solid var(--grid);
-            border-radius: 8px;
-            padding: 14px 16px;
-            color: #e6f0ff;
-            font-size: 16px;
-            font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
-            outline: none;
-            transition: all 0.2s;
-            width: 100%;
-            box-sizing: border-box;
-          }
-          .setup-input:focus {
-            border-color: var(--accent);
-            box-shadow: 0 0 0 3px rgba(47, 210, 122, 0.15);
-            background: rgba(14, 24, 51, 0.95);
-          }
-          .setup-input::placeholder {
-            color: #6b7a99;
-          }
-          .setup-hint {
-            font-size: 12px;
-            color: #9fb3d1;
-            margin-top: 4px;
-            line-height: 1.4;
-            opacity: 0.8;
-          }
-          .setup-error {
-            background: rgba(255, 107, 107, 0.15);
-            border: 1px solid rgba(255, 107, 107, 0.4);
-            border-radius: 8px;
-            padding: 12px 16px;
-            margin-bottom: 20px;
-            color: #ff6b6b;
-            font-size: 13px;
-            line-height: 1.5;
-          }
-          .setup-button {
-            width: 100%;
-            padding: 14px;
-            border-radius: 8px;
-            background: linear-gradient(180deg, #2fd27a, #11a85a);
-            border: none;
-            color: #09151a;
-            font-weight: 700;
-            font-size: 16px;
-            cursor: pointer;
-            transition: all 0.2s;
-            margin-top: 8px;
-          }
-          .setup-button:hover:not(:disabled) {
-            opacity: 0.9;
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(47, 210, 122, 0.3);
-          }
-          .setup-button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-          }
-        `}</style>
       </>
     );
   }
@@ -1178,106 +970,64 @@ export default function Home() {
       
       {/* WiFi Configuration Screen - Show if WiFi is not connected, we've checked status, and MQTT is connected */}
       {needsWifiConfig && !isWaitingForReconnection && mqttConnected && hasCheckedWifiStatus && (
-        <div className="wrap" style={{ maxWidth: '500px', margin: '50px auto' }}>
-          <div style={{ 
-            background: '#121a33', 
-            borderRadius: '14px', 
-            border: '1px solid #1b2547',
-            padding: '30px'
-          }}>
-            <h2 style={{ color: '#2fd27a', marginBottom: '10px', fontSize: '24px', textAlign: 'center' }}>
-              WiFi Configuration Required
-            </h2>
-            <p style={{ color: '#9fb3d1', marginBottom: '25px', textAlign: 'center', fontSize: '14px' }}>
-              ESP32 is not connected to WiFi. Please configure WiFi credentials to continue.
-            </p>
-            
-            {/* WiFi Configuration Form */}
-            <div style={{ marginBottom: '15px' }}>
-              <label style={{ display: 'block', color: '#e6f0ff', marginBottom: '5px', fontSize: '13px', fontWeight: '500' }}>
-                WiFi Network Name (SSID) *
-              </label>
-              <input
-                type="text"
-                value={newWifiSSID}
-                onChange={(e) => setNewWifiSSID(e.target.value)}
-                placeholder="Enter WiFi network name"
-                maxLength={32}
-                style={{
-                  width: '100%',
-                  padding: '12px',
-                  background: '#1b2547',
-                  border: '1px solid #2a3a5c',
-                  borderRadius: '6px',
-                  color: '#e6f0ff',
-                  fontSize: '14px',
-                  boxSizing: 'border-box'
-                }}
-              />
-            </div>
-            
-            <div style={{ marginBottom: '15px' }}>
-              <label style={{ display: 'block', color: '#e6f0ff', marginBottom: '5px', fontSize: '13px', fontWeight: '500' }}>
-                WiFi Password
-              </label>
-              <input
-                type="password"
-                value={newWifiPassword}
-                onChange={(e) => setNewWifiPassword(e.target.value)}
-                placeholder="Enter WiFi password (if required)"
-                maxLength={64}
-                style={{
-                  width: '100%',
-                  padding: '12px',
-                  background: '#1b2547',
-                  border: '1px solid #2a3a5c',
-                  borderRadius: '6px',
-                  color: '#e6f0ff',
-                  fontSize: '14px',
-                  boxSizing: 'border-box'
-                }}
-              />
-            </div>
-            
-            {wifiConfigStatus && (
-              <div style={{
-                padding: '10px',
-                marginBottom: '15px',
-                borderRadius: '6px',
-                background: wifiConfigStatus.startsWith('error') ? 'rgba(245, 179, 66, 0.1)' : 
-                            wifiConfigStatus.startsWith('success') ? 'rgba(47, 210, 122, 0.1)' : 
-                            wifiConfigStatus.startsWith('warning') ? 'rgba(245, 179, 66, 0.1)' :
-                            'rgba(47, 210, 122, 0.1)',
-                border: `1px solid ${wifiConfigStatus.startsWith('error') ? 'rgba(245, 179, 66, 0.3)' : 
-                                wifiConfigStatus.startsWith('success') ? 'rgba(47, 210, 122, 0.3)' : 
-                                wifiConfigStatus.startsWith('warning') ? 'rgba(245, 179, 66, 0.3)' :
-                                'rgba(47, 210, 122, 0.3)'}`,
-                color: wifiConfigStatus.startsWith('error') || wifiConfigStatus.startsWith('warning') ? '#f5b342' : '#2fd27a',
-                fontSize: '13px',
-                lineHeight: '1.5'
-              }}>
-                {wifiConfigStatus.replace(/^(error|success|warning|saving):\s*/, '')}
+        <div className="wifi-config-wrap">
+          <div className="wifi-config-card">
+            <div className="wifi-config-header">
+              <div className="sun"></div>
+              <div className="wifi-config-title">WiFi Configuration</div>
+              <div className="wifi-config-subtitle">ESP32 Device Setup</div>
+              <div className="wifi-config-subtitle" style={{ marginTop: "4px", fontSize: "12px", opacity: 0.7 }}>
+                Configure WiFi credentials to connect ESP32 to your network
               </div>
-            )}
-            
-            <button
-              onClick={handleSaveWifi}
-              disabled={!newWifiSSID.trim() || wifiConfigStatus === 'saving...'}
-              style={{
-                width: '100%',
-                padding: '14px',
-                background: newWifiSSID.trim() && wifiConfigStatus !== 'saving...' ? '#2fd27a' : '#1b2547',
-                color: newWifiSSID.trim() && wifiConfigStatus !== 'saving...' ? '#0b1020' : '#9fb3d1',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: newWifiSSID.trim() && wifiConfigStatus !== 'saving...' ? 'pointer' : 'not-allowed',
-                fontWeight: '600',
-                fontSize: '16px',
-                marginTop: '10px'
-              }}
-            >
-              {wifiConfigStatus === 'saving...' ? 'Saving...' : 'Save & Connect'}
-            </button>
+            </div>
+
+            <form onSubmit={(e) => { e.preventDefault(); handleSaveWifi(); }} className="wifi-config-form">
+              {wifiConfigStatus && (
+                <div className={`wifi-config-${wifiConfigStatus.startsWith('error') || wifiConfigStatus.startsWith('warning') ? 'error' : 'message'}`}>
+                  {wifiConfigStatus.replace(/^(error|success|warning|saving):\s*/, '')}
+                </div>
+              )}
+
+              <div className="form-group">
+                <label htmlFor="wifiSSID">WiFi Network Name (SSID)</label>
+                <input
+                  type="text"
+                  id="wifiSSID"
+                  value={newWifiSSID}
+                  onChange={(e) => setNewWifiSSID(e.target.value)}
+                  placeholder="Enter WiFi network name"
+                  maxLength={32}
+                  required
+                  autoFocus
+                  disabled={wifiConfigStatus === 'saving...'}
+                />
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="wifiPassword">WiFi Password</label>
+                <input
+                  type="password"
+                  id="wifiPassword"
+                  value={newWifiPassword}
+                  onChange={(e) => setNewWifiPassword(e.target.value)}
+                  placeholder="Enter WiFi password (if required)"
+                  maxLength={64}
+                  disabled={wifiConfigStatus === 'saving...'}
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="wifi-config-btn"
+                disabled={!newWifiSSID.trim() || wifiConfigStatus === 'saving...'}
+              >
+                {wifiConfigStatus === 'saving...' ? 'Saving...' : 'Save & Connect'}
+              </button>
+            </form>
+
+            <div className="wifi-config-footer">
+              <span className="muted">ESP32 will reconnect to the configured WiFi network</span>
+            </div>
           </div>
         </div>
       )}
@@ -1334,17 +1084,7 @@ export default function Home() {
           </div>
         </div>
         {error && (
-          <div style={{
-            background: "rgba(255, 107, 107, 0.1)",
-            border: "1px solid #ff6b6b",
-            borderRadius: "8px",
-            padding: "12px",
-            marginBottom: "16px",
-            color: "#ff6b6b",
-            fontSize: "13px",
-            lineHeight: "1.6",
-            whiteSpace: "pre-line"
-          }}>
+          <div className="error-message">
             <strong>Connection Error:</strong> {error}
             {!MQTT_BROKER_URL && (
               <div style={{ marginTop: "12px", fontSize: "12px" }}>
@@ -1361,50 +1101,35 @@ export default function Home() {
         )}
         
         {!mqttConnected && MQTT_BROKER_URL && (
-          <div style={{
-            background: "rgba(245, 179, 66, 0.1)",
-            border: "1px solid #f5b342",
-            borderRadius: "8px",
-            padding: "12px",
-            marginBottom: "16px",
-            color: "#f5b342",
-            fontSize: "13px"
-          }}>
+          <div className="warning-message">
             <strong>⚠️ MQTT Disconnected:</strong> Attempting to reconnect...
           </div>
         )}
 
         {/* WiFi Configuration Section */}
-        <div style={{ marginBottom: '20px', padding: '20px', background: '#121a33', borderRadius: '14px', border: '1px solid #1b2547' }}>
-          <h3 style={{ color: '#2fd27a', marginBottom: '15px', fontSize: '18px', fontWeight: '600' }}>WiFi Configuration</h3>
+        <div className="wifi-config-section">
+          <h3>WiFi Configuration</h3>
           
           {/* Current WiFi Status */}
-          <div style={{ marginBottom: '15px', padding: '12px', background: '#0d142b', borderRadius: '8px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-              <div>
-                <strong style={{ color: '#e6f0ff', fontSize: '14px' }}>Current WiFi:</strong>
-                <span style={{ color: wifiConnected ? '#2fd27a' : '#f5b342', marginLeft: '10px', fontSize: '14px' }}>
-                  {wifiSSID || 'Not configured'}
-                </span>
-                {wifiConnected && (
-                  <span style={{ color: '#2fd27a', marginLeft: '10px', fontSize: '12px' }}>✓ Connected</span>
-                )}
-                {!wifiConnected && wifiSSID && (
-                  <span style={{ color: '#f5b342', marginLeft: '10px', fontSize: '12px' }}>⚠ Not connected</span>
-                )}
+          <div className="wifi-status-container">
+            <div className="wifi-status-row">
+              <div className="wifi-status-info">
+                <div>
+                  <strong className="wifi-status-label">Current WiFi:</strong>
+                  <span className={`wifi-status-value ${!wifiConnected ? 'disconnected' : ''}`}>
+                    {wifiSSID || 'Not configured'}
+                  </span>
+                  {wifiConnected && (
+                    <span className="wifi-status-badge">✓ Connected</span>
+                  )}
+                  {!wifiConnected && wifiSSID && (
+                    <span className="wifi-status-badge disconnected">⚠ Not connected</span>
+                  )}
+                </div>
               </div>
               <button
                 onClick={() => setShowWifiConfig(!showWifiConfig)}
-                style={{
-                  padding: '8px 16px',
-                  background: showWifiConfig ? '#2a3a5c' : '#2fd27a',
-                  color: showWifiConfig ? '#9fb3d1' : '#0b1020',
-                  border: 'none',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  fontWeight: '600',
-                  fontSize: '13px'
-                }}
+                className={`wifi-toggle-btn ${showWifiConfig ? 'active' : ''}`}
               >
                 {showWifiConfig ? 'Cancel' : wifiSSID ? 'Change WiFi' : 'Configure WiFi'}
               </button>
@@ -1413,9 +1138,9 @@ export default function Home() {
           
           {/* WiFi Configuration Form */}
           {showWifiConfig && (
-            <div style={{ padding: '15px', background: '#0d142b', borderRadius: '8px' }}>
-              <div style={{ marginBottom: '15px' }}>
-                <label style={{ display: 'block', color: '#e6f0ff', marginBottom: '5px', fontSize: '13px', fontWeight: '500' }}>
+            <div className="wifi-form-container">
+              <div className="wifi-form-field">
+                <label className="wifi-form-label">
                   WiFi Network Name (SSID) *
                 </label>
                 <input
@@ -1424,21 +1149,12 @@ export default function Home() {
                   onChange={(e) => setNewWifiSSID(e.target.value)}
                   placeholder="Enter WiFi network name"
                   maxLength={32}
-                  style={{
-                    width: '100%',
-                    padding: '10px',
-                    background: '#1b2547',
-                    border: '1px solid #2a3a5c',
-                    borderRadius: '6px',
-                    color: '#e6f0ff',
-                    fontSize: '14px',
-                    boxSizing: 'border-box'
-                  }}
+                  className="wifi-form-input"
                 />
               </div>
               
-              <div style={{ marginBottom: '15px' }}>
-                <label style={{ display: 'block', color: '#e6f0ff', marginBottom: '5px', fontSize: '13px', fontWeight: '500' }}>
+              <div className="wifi-form-field">
+                <label className="wifi-form-label">
                   WiFi Password
                 </label>
                 <input
@@ -1447,36 +1163,16 @@ export default function Home() {
                   onChange={(e) => setNewWifiPassword(e.target.value)}
                   placeholder="Enter WiFi password (if required)"
                   maxLength={64}
-                  style={{
-                    width: '100%',
-                    padding: '10px',
-                    background: '#1b2547',
-                    border: '1px solid #2a3a5c',
-                    borderRadius: '6px',
-                    color: '#e6f0ff',
-                    fontSize: '14px',
-                    boxSizing: 'border-box'
-                  }}
+                  className="wifi-form-input"
                 />
               </div>
               
               {wifiConfigStatus && (
-                <div style={{
-                  padding: '10px',
-                  marginBottom: '15px',
-                  borderRadius: '6px',
-                  background: wifiConfigStatus.startsWith('error') ? 'rgba(245, 179, 66, 0.1)' : 
-                              wifiConfigStatus.startsWith('success') ? 'rgba(47, 210, 122, 0.1)' : 
-                              wifiConfigStatus.startsWith('warning') ? 'rgba(245, 179, 66, 0.1)' :
-                              'rgba(47, 210, 122, 0.1)',
-                  border: `1px solid ${wifiConfigStatus.startsWith('error') ? 'rgba(245, 179, 66, 0.3)' : 
-                                  wifiConfigStatus.startsWith('success') ? 'rgba(47, 210, 122, 0.3)' : 
-                                  wifiConfigStatus.startsWith('warning') ? 'rgba(245, 179, 66, 0.3)' :
-                                  'rgba(47, 210, 122, 0.3)'}`,
-                  color: wifiConfigStatus.startsWith('error') || wifiConfigStatus.startsWith('warning') ? '#f5b342' : '#2fd27a',
-                  fontSize: '13px',
-                  lineHeight: '1.5'
-                }}>
+                <div className={`wifi-status-message ${
+                  wifiConfigStatus.startsWith('error') ? 'error' : 
+                  wifiConfigStatus.startsWith('success') ? 'success' : 
+                  wifiConfigStatus.startsWith('warning') ? 'warning' : 'success'
+                }`}>
                   {wifiConfigStatus.replace(/^(error|success|warning|saving):\s*/, '')}
                 </div>
               )}
@@ -1484,34 +1180,15 @@ export default function Home() {
               <button
                 onClick={handleSaveWifi}
                 disabled={!newWifiSSID.trim() || wifiConfigStatus === 'saving...'}
-                style={{
-                  width: '100%',
-                  padding: '12px',
-                  background: newWifiSSID.trim() && wifiConfigStatus !== 'saving...' ? '#2fd27a' : '#1b2547',
-                  color: newWifiSSID.trim() && wifiConfigStatus !== 'saving...' ? '#0b1020' : '#9fb3d1',
-                  border: 'none',
-                  borderRadius: '6px',
-                  cursor: newWifiSSID.trim() && wifiConfigStatus !== 'saving...' ? 'pointer' : 'not-allowed',
-                  fontWeight: '600',
-                  fontSize: '14px'
-                }}
+                className="wifi-save-btn"
               >
                 {wifiConfigStatus === 'saving...' ? 'Saving...' : 'Save & Connect'}
               </button>
               
               {!wifiConnected && (
-                <div style={{
-                  marginTop: '15px',
-                  padding: '10px',
-                  background: 'rgba(245, 179, 66, 0.1)',
-                  border: '1px solid rgba(245, 179, 66, 0.3)',
-                  borderRadius: '6px',
-                  color: '#f5b342',
-                  fontSize: '12px',
-                  lineHeight: '1.5'
-                }}>
+                <div className="wifi-note">
                   <strong>Note:</strong> If ESP32 is not connected to WiFi, it cannot receive MQTT messages. 
-                  For initial setup, connect to the ESP32's AP network (<code style={{ background: 'rgba(0,0,0,0.3)', padding: '2px 4px', borderRadius: '3px' }}>Solar_Capstone_Admin</code>) 
+                  For initial setup, connect to the ESP32's AP network (<code>Solar_Capstone_Admin</code>) 
                   once. After that, all WiFi configuration should be done via this deployed app.
                 </div>
               )}
@@ -1569,7 +1246,7 @@ export default function Home() {
                   </div>
                 </div>
               </div>
-              <div className="kpis" style={{ marginTop: "10px" }}>
+              <div className="kpis mt-10">
                 <div className="kpi">
                   <div className="label">Battery V</div>
                   <div className="value">
@@ -1595,7 +1272,7 @@ export default function Home() {
                   </div>
                 </div>
               </div>
-              <div style={{ marginTop: "10px", display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+              <div className="flex-row mt-10">
                 <span className="mono">
                   Tilt: {data?.tiltAngle !== undefined ? data.tiltAngle : "--"}°
                 </span>
@@ -1625,7 +1302,7 @@ export default function Home() {
               </div>
               <div className="manual-header">
                 <span className="pill">{manual ? "Manual Control" : "Auto Tracking"}</span>
-                <div style={{ fontSize: "12px", color: "var(--muted)" }}>
+                <div className="muted" style={{ fontSize: "12px" }}>
                   Servo control disabled (read-only mode). Grid price and device name can be edited below.
                 </div>
               </div>
@@ -1708,12 +1385,11 @@ export default function Home() {
                     maxLength={24}
                   />
                 </div>
-                <div style={{ marginBottom: "12px", fontSize: "13px", color: "var(--ink)" }}>
-                  Current Device: <span className="mono" style={{ fontWeight: "600" }}>{currentDevice}</span>
+                <div className="mb-12" style={{ fontSize: "13px" }}>
+                  Current Device: <span className="mono fw-600">{currentDevice}</span>
                 </div>
                 <button
-                  className="manual-btn"
-                  style={{ width: "100%", marginTop: "8px" }}
+                  className="manual-btn full-width mt-8"
                   onClick={async () => {
                     try {
                       await sendControl({ startCharging: true });
@@ -1781,7 +1457,7 @@ export default function Home() {
                   </tr>
                 </tbody>
               </table>
-              <div className="muted" style={{ marginTop: "8px" }}>
+              <div className="muted mt-8">
                 Actual Power Estimate: <span className="mono">{data?.powerActualW !== undefined ? data.powerActualW.toFixed(2) : "--"}</span> W
               </div>
               <div className="muted">
@@ -1793,49 +1469,29 @@ export default function Home() {
           </div>
           </div>
 
-          <div className="card" style={{ gridColumn: "1/-1" }}>
+          <div className="card grid-full">
             <h3>Monthly Report — Energy History</h3>
             <div className="content">
               {historyError && (
-                <div style={{
-                  background: "rgba(255, 107, 107, 0.1)",
-                  border: "1px solid #ff6b6b",
-                  borderRadius: "8px",
-                  padding: "12px",
-                  marginBottom: "16px",
-                  color: "#ff6b6b",
-                  fontSize: "13px",
-                  lineHeight: "1.6"
-                }}>
+                <div className="history-error">
                   <strong>History Error:</strong> {historyError}
                 </div>
               )}
-              <div className="history-chart" style={{ position: "relative" }}>
+              <div className="history-chart relative">
                 <canvas ref={historyChartRef} width={800} height={300}></canvas>
                 {tooltip && (
                   <div
+                    className="tooltip"
                     style={{
-                      position: "fixed",
                       left: typeof window !== "undefined" ? Math.min(tooltip.x + 10, window.innerWidth - 220) : tooltip.x + 10,
-                      top: Math.max(tooltip.y - 80, 10),
-                      background: "rgba(18, 27, 51, 0.95)",
-                      border: "1px solid var(--grid)",
-                      borderRadius: "8px",
-                      padding: "10px 12px",
-                      fontSize: "12px",
-                      color: "var(--ink)",
-                      pointerEvents: "none",
-                      zIndex: 1000,
-                      boxShadow: "0 4px 12px rgba(0, 0, 0, 0.4)",
-                      maxWidth: "200px",
-                      backdropFilter: "blur(10px)"
+                      top: Math.max(tooltip.y - 80, 10)
                     }}
                   >
-                    <div style={{ fontWeight: "600", marginBottom: "4px" }}>{tooltip.date}</div>
-                    <div style={{ color: "var(--muted)", fontSize: "11px" }}>
+                    <div className="tooltip-title">{tooltip.date}</div>
+                    <div className="tooltip-text">
                       {tooltip.energy} kWh · {tooltip.battery}% batt
                     </div>
-                    <div style={{ color: "var(--muted)", fontSize: "11px", marginTop: "2px" }}>
+                    <div className="tooltip-text" style={{ marginTop: "2px" }}>
                       {tooltip.device}
                     </div>
                   </div>
@@ -1926,8 +1582,7 @@ export default function Home() {
                 </table>
               </div>
               <button
-                className="manual-btn alt"
-                style={{ marginTop: "12px", width: "100%" }}
+                className="manual-btn alt mt-12 full-width"
                 onClick={loadHistory}
               >
                 Refresh History
@@ -1936,387 +1591,6 @@ export default function Home() {
           </div>
         </div>
         <footer>Charge phones with sunshine — savings and impact shown are based on actual tracker readings and energy estimates.</footer>
-        <style jsx global>{`
-        :root {
-          --bg: #0b1020;
-          --card: #121a33;
-          --ink: #e6f0ff;
-          --muted: #9fb3d1;
-          --accent: #2fd27a;
-          --warn: #f5b342;
-          --err: #ff6b6b;
-          --grid: #1b2547;
-        }
-        * {
-          box-sizing: border-box;
-        }
-        body {
-          margin: 0;
-          font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-          background: radial-gradient(1200px 600px at 20% -10%, #18306400, #18306488), var(--bg);
-          color: var(--ink);
-        }
-        .wrap {
-          max-width: 1100px;
-          margin: 32px auto;
-          padding: 0 16px;
-        }
-        .header {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-          margin-bottom: 18px;
-          flex-wrap: wrap;
-        }
-        .header-left {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          flex-wrap: wrap;
-        }
-        .header-right {
-          display: flex;
-          align-items: center;
-          gap: 16px;
-          margin-left: auto;
-        }
-        .header-nav-link {
-          color: var(--muted);
-          text-decoration: none;
-          font-size: 13px;
-          font-weight: 500;
-          transition: color 0.2s;
-          padding: 6px 0;
-        }
-        .header-nav-link:hover {
-          color: var(--accent);
-        }
-        .logout-btn {
-          padding: 6px 12px;
-          border-radius: 8px;
-          background: linear-gradient(180deg, #30406d, #1f2a4a);
-          border: 1px solid var(--grid);
-          color: var(--muted);
-          font-size: 11px;
-          font-weight: 600;
-          cursor: pointer;
-          transition: all 0.2s;
-        }
-        .logout-btn:hover {
-          background: linear-gradient(180deg, #3d4f7a, #2a3658);
-          color: var(--ink);
-          border-color: var(--accent);
-        }
-        @media (max-width: 768px) {
-          .header {
-            flex-direction: column;
-            align-items: flex-start;
-          }
-          .header-right {
-            margin-left: 0;
-            width: 100%;
-            justify-content: flex-end;
-          }
-        }
-        .sun {
-          width: 14px;
-          height: 14px;
-          background: linear-gradient(180deg, #ffd24d, #ff9a3c);
-          border-radius: 50%;
-          box-shadow: 0 0 24px #ffb347a0;
-        }
-        .title {
-          font-weight: 700;
-          letter-spacing: 0.2px;
-        }
-        .grid {
-          display: grid;
-          grid-template-columns: 1.2fr 0.8fr;
-          gap: 16px;
-        }
-        .right-column-container {
-          display: flex;
-          flex-direction: column;
-          gap: 16px;
-          height: 100%;
-          align-items: stretch;
-        }
-        .card {
-          background: linear-gradient(180deg, #101734, #0d142b);
-          border: 1px solid var(--grid);
-          border-radius: 14px;
-          overflow: hidden;
-          height: fit-content;
-        }
-        .right-column-container > .card {
-          flex: 1;
-          display: flex;
-          flex-direction: column;
-        }
-        .right-column-container > .card .content {
-          flex: 1;
-        }
-        .card h3 {
-          margin: 0;
-          padding: 14px 16px;
-          border-bottom: 1px solid var(--grid);
-          font-size: 14px;
-          color: var(--muted);
-        }
-        .content {
-          padding: 14px 16px;
-        }
-        .kpis {
-          display: grid;
-          grid-template-columns: repeat(4, 1fr);
-          gap: 10px;
-          margin-top: 8px;
-        }
-        .kpi {
-          background: #0e1833;
-          border: 1px solid var(--grid);
-          border-radius: 10px;
-          padding: 10px 12px;
-        }
-        .kpi .label {
-          font-size: 11px;
-          color: var(--muted);
-        }
-        .kpi .value {
-          font-size: 18px;
-          font-weight: 700;
-          margin-top: 4px;
-        }
-        .mono {
-          font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
-        }
-        .pill {
-          display: inline-block;
-          padding: 2px 8px;
-          border-radius: 99px;
-          border: 1px solid var(--grid);
-          font-size: 11px;
-          color: var(--muted);
-        }
-        .badge {
-          color: #09151a;
-          background: linear-gradient(180deg, #2fd27a, #11a85a);
-          border: none;
-          padding: 2px 8px;
-          border-radius: 8px;
-          font-weight: 700;
-        }
-        .manual-header {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          margin-bottom: 12px;
-        }
-        .manual-btn {
-          cursor: pointer;
-          font-size: 12px;
-          padding: 6px 12px;
-          border-radius: 8px;
-          background: linear-gradient(180deg, #2fd27a, #11a85a);
-          border: none;
-          color: #09151a;
-          font-weight: 700;
-        }
-        .manual-btn.alt {
-          background: linear-gradient(180deg, #30406d, #1f2a4a);
-          color: var(--muted);
-          border: 1px solid var(--grid);
-        }
-        .controls {
-          display: flex;
-          flex-direction: column;
-          gap: 14px;
-        }
-        .slider-group {
-          display: flex;
-          flex-direction: column;
-          gap: 6px;
-        }
-        .slider-group label {
-          font-size: 12px;
-          color: var(--muted);
-          font-weight: 600;
-        }
-        .slider-footer {
-          display: flex;
-          justify-content: space-between;
-          font-size: 11px;
-          color: var(--muted);
-        }
-        input[type="range"] {
-          -webkit-appearance: none;
-          width: 100%;
-          height: 4px;
-          background: var(--grid);
-          border-radius: 4px;
-          outline: none;
-        }
-        input[type="range"]::-webkit-slider-thumb {
-          -webkit-appearance: none;
-          width: 16px;
-          height: 16px;
-          border-radius: 50%;
-          background: var(--accent);
-          border: none;
-          box-shadow: 0 0 8px #2fd27a66;
-        }
-        input[type="range"]:disabled {
-          opacity: 0.35;
-        }
-        input[type="text"],
-        input[type="number"] {
-          background: #0e1833;
-          border: 1px solid var(--grid);
-          border-radius: 8px;
-          padding: 8px 12px;
-          color: var(--ink);
-          font-size: 13px;
-          width: 100%;
-        }
-        input[type="text"]:focus,
-        input[type="number"]:focus {
-          outline: none;
-          border-color: var(--accent);
-        }
-        .legend {
-          display: flex;
-          gap: 12px;
-          margin-top: 10px;
-          font-size: 11px;
-          color: var(--muted);
-        }
-        .legend span {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-        }
-        .dot {
-          width: 10px;
-          height: 10px;
-          border-radius: 50%;
-        }
-        .dot.top {
-          background: #ff6b6b;
-        }
-        .dot.left {
-          background: #2fd27a;
-        }
-        .dot.right {
-          background: #4db5ff;
-        }
-        .chart {
-          position: relative;
-          height: 220px;
-          background: linear-gradient(0deg, #0a1124, #0d1630);
-          border: 1px solid var(--grid);
-          border-radius: 12px;
-          overflow: hidden;
-        }
-        .table {
-          width: 100%;
-          border-collapse: collapse;
-          margin-top: 6px;
-        }
-        .table th,
-        .table td {
-          border-bottom: 1px solid var(--grid);
-          padding: 8px 4px;
-          text-align: left;
-          font-size: 13px;
-        }
-        .muted {
-          color: var(--muted);
-        }
-        footer {
-          margin-top: 18px;
-          font-size: 12px;
-          color: var(--muted);
-        }
-        .history-chart {
-          height: 300px;
-          background: linear-gradient(0deg, #0a1124, #0d1630);
-          border: 1px solid var(--grid);
-          border-radius: 12px;
-          margin-top: 12px;
-          position: relative;
-        }
-        .form-group {
-          display: flex;
-          flex-direction: column;
-          gap: 6px;
-          margin-bottom: 12px;
-        }
-        .form-group label {
-          font-size: 12px;
-          color: var(--muted);
-          font-weight: 600;
-        }
-        .status-grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-          gap: 12px;
-          margin-bottom: 16px;
-        }
-        .status-card {
-          background: linear-gradient(135deg, #142041, #0e1527);
-          border: 1px solid var(--grid);
-          border-radius: 14px;
-          padding: 14px 18px;
-          display: flex;
-          flex-direction: column;
-          gap: 6px;
-          box-shadow: 0 10px 30px #06091480;
-        }
-        .status-card .label {
-          font-size: 11px;
-          letter-spacing: 0.6px;
-          color: var(--muted);
-          text-transform: uppercase;
-        }
-        .status-card .value {
-          font-size: 24px;
-          font-weight: 700;
-        }
-        .status-card .sub {
-          font-size: 12px;
-          color: var(--muted);
-        }
-        .status-card .trend {
-          font-size: 11px;
-          color: #2fd27a;
-          font-weight: 600;
-        }
-        .history-meta {
-          margin-top: 12px;
-          border: 1px solid var(--grid);
-          border-radius: 12px;
-          padding: 12px;
-          background: #0e1833;
-        }
-        .history-meta h4 {
-          margin: 0 0 6px 0;
-          font-size: 13px;
-          color: var(--muted);
-          text-transform: uppercase;
-          letter-spacing: 0.4px;
-        }
-        .history-meta ul {
-          margin: 0;
-          padding-left: 18px;
-          font-size: 12px;
-          color: var(--ink);
-        }
-        .peso {
-          font-weight: 700;
-          color: #2fd27a;
-        }
-      `}</style>
         </div>
       )}
     </>
