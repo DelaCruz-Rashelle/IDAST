@@ -198,20 +198,34 @@ struct ControlPacket {
     int n = WiFi.scanNetworks();
     Serial.printf("   Found %d networks\n", n);
     bool foundSSID = false;
+    int targetChannel = 1;
     for (int i = 0; i < n; i++) {
       Serial.printf("   [%d] %s (RSSI: %d, Channel: %d)\n", 
                     i, WiFi.SSID(i).c_str(), WiFi.RSSI(i), WiFi.channel(i));
       if (WiFi.SSID(i) == wifiSSID) {
         foundSSID = true;
-        Serial.printf("   ✅ Found target SSID on channel %d\n", WiFi.channel(i));
+        targetChannel = WiFi.channel(i);
+        Serial.printf("   ✅ Found target SSID on channel %d\n", targetChannel);
+        break;  // Found it, no need to continue scanning
       }
     }
     
     if (!foundSSID) {
       Serial.println("   ⚠️ Target SSID not found in scan!");
+      Serial.println("   The stored WiFi network is not available.");
+      Serial.println("   Device will fall back to AP mode for reconfiguration.");
+      Serial.println("   Connect to AP and update WiFi settings via: http://192.168.4.1/wifi-setup");
+      
+      // Re-enable AP mode immediately since network is not available
+      WiFi.mode(WIFI_AP);
+      WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
+      Serial.printf("   AP IP: %s\n", WiFi.softAPIP().toString().c_str());
+      Serial.println("   Configure WiFi via: http://" + WiFi.softAPIP().toString() + "/wifi-setup");
+      return;  // Skip connection attempt since network is not available
     }
     
-    // Now try to connect
+    // Network found, now try to connect
+    Serial.println("   Attempting connection...");
     WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
     
     int attempts = 0;
@@ -244,6 +258,10 @@ struct ControlPacket {
       initMqtt();
     } else {
       Serial.printf("❌ WiFi Station connection failed! Status code: %d\n", WiFi.status());
+      Serial.println("   Possible reasons:");
+      Serial.println("   - Incorrect password");
+      Serial.println("   - Network security type not supported");
+      Serial.println("   - Network temporarily unavailable");
       Serial.println("   Device will continue in AP mode only");
       // Re-enable AP mode if STA connection fails
       WiFi.mode(WIFI_AP);
@@ -855,6 +873,61 @@ void handle_wifi_setup() {
     }
     
     Serial.printf("📥 MQTT control message received: %s\n", messageStr.c_str());
+    
+    // Parse WiFi configuration first (before other commands)
+    // Expected format: {"wifiSSID": "MyNetwork", "wifiPassword": "password"}
+    int wifiSSIDIdx = messageStr.indexOf("\"wifiSSID\"");
+    if (wifiSSIDIdx >= 0) {
+      int colonIdx = messageStr.indexOf(":", wifiSSIDIdx);
+      if (colonIdx >= 0) {
+        int quote1 = messageStr.indexOf("\"", colonIdx);
+        if (quote1 >= 0) {
+          int quote2 = messageStr.indexOf("\"", quote1 + 1);
+          if (quote2 > quote1) {
+            String ssidStr = messageStr.substring(quote1 + 1, quote2);
+            ssidStr.trim();
+            if (ssidStr.length() > 0 && ssidStr.length() <= 32) {
+              // Parse wifiPassword (optional)
+              String pwdStr = "";
+              int wifiPwdIdx = messageStr.indexOf("\"wifiPassword\"");
+              if (wifiPwdIdx >= 0) {
+                int pwdColonIdx = messageStr.indexOf(":", wifiPwdIdx);
+                if (pwdColonIdx >= 0) {
+                  int pwdQuote1 = messageStr.indexOf("\"", pwdColonIdx);
+                  if (pwdQuote1 >= 0) {
+                    int pwdQuote2 = messageStr.indexOf("\"", pwdQuote1 + 1);
+                    if (pwdQuote2 > pwdQuote1) {
+                      pwdStr = messageStr.substring(pwdQuote1 + 1, pwdQuote2);
+                    }
+                  }
+                }
+              }
+              
+              // Save WiFi credentials
+              settings.begin("solar_rx", false);
+              settings.putString("wifiSSID", ssidStr);
+              settings.putString("wifiPassword", pwdStr);
+              settings.end();
+              
+              Serial.println("\n✅ WiFi credentials received via MQTT:");
+              Serial.printf("   SSID: %s\n", ssidStr.c_str());
+              Serial.println("   Password: [hidden]");
+              
+              // Update global variables
+              wifiSSID = ssidStr;
+              wifiPassword = pwdStr;
+              wifiConfigured = true;
+              
+              // Reconnect WiFi with new credentials
+              reconnectWiFi();
+              
+              // Return early - WiFi reconnection will handle the rest
+              return;
+            }
+          }
+        }
+      }
+    }
     
     // Parse JSON manually (simple parsing for gridPrice and deviceName)
     // Expected format: {"gridPrice": 12.5, "deviceName": "iPhone 15"}

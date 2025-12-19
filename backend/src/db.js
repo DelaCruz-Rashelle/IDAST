@@ -49,8 +49,8 @@ export async function dbPing() {
 export async function initSchema() {
   const conn = await pool.getConnection();
   try {
-    // Use exact SQL format from schema.sql (with blank lines preserved)
-    const sql = `CREATE TABLE IF NOT EXISTS telemetry (
+    // Create telemetry table
+    const telemetrySql = `CREATE TABLE IF NOT EXISTS telemetry (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   ts TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 
@@ -91,8 +91,30 @@ export async function initSchema() {
 
   INDEX idx_ts (ts)
 )`;
-    await conn.query(sql);
+    await conn.query(telemetrySql);
     console.log("Database schema initialized (telemetry table ready)");
+
+    // Create device table
+    const deviceSql = `CREATE TABLE IF NOT EXISTS device (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  device_name VARCHAR(24) NOT NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_updated_at (updated_at)
+)`;
+    await conn.query(deviceSql);
+    console.log("Database schema initialized (device table ready)");
+
+    // Create grid_price table
+    const gridPriceSql = `CREATE TABLE IF NOT EXISTS grid_price (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  price DECIMAL(10,2) NOT NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_updated_at (updated_at)
+)`;
+    await conn.query(gridPriceSql);
+    console.log("Database schema initialized (grid_price table ready)");
   } catch (error) {
     handleDatabaseError(error, "schema initialization");
     throw error;

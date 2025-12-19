@@ -3,7 +3,7 @@ import { useRouter } from "next/router";
 import Head from "next/head";
 import Link from "next/link";
 import mqtt from "mqtt";
-import { handleMqttError, handleControlError, formatErrorMessage } from "../utils/errorHandler.js";
+import { handleMqttError, handleControlError, handleApiError, formatErrorMessage } from "../utils/errorHandler.js";
 
 const MQTT_BROKER_URL = process.env.NEXT_PUBLIC_MQTT_BROKER_URL || "";
 const MQTT_USERNAME = process.env.NEXT_PUBLIC_MQTT_USERNAME || "";
@@ -18,16 +18,32 @@ export default function Home() {
   const [tiltValue, setTiltValue] = useState(90);
   const [panValue, setPanValue] = useState(90);
   const [deviceName, setDeviceName] = useState("");
-  const [gridPrice, setGridPrice] = useState("12.00");
+  const [gridPrice, setGridPrice] = useState("");
   const [currentDevice, setCurrentDevice] = useState("Unknown");
   const [sliderActive, setSliderActive] = useState({ tilt: false, pan: false });
   const [error, setError] = useState("");
   const [historyError, setHistoryError] = useState("");
   const [mqttConnected, setMqttConnected] = useState(false);
   const [deviceId, setDeviceId] = useState("");
+  const [chargingStarted, setChargingStarted] = useState(false);
   const deviceNameInputFocusedRef = useRef(false);
   const deviceNameDebounceRef = useRef(null);
   const mqttClientRef = useRef(null);
+  
+  // WiFi configuration state
+  const [wifiSSID, setWifiSSID] = useState("");
+  const [wifiConnected, setWifiConnected] = useState(false);
+  const [showWifiConfig, setShowWifiConfig] = useState(false);
+  const [newWifiSSID, setNewWifiSSID] = useState("");
+  const [newWifiPassword, setNewWifiPassword] = useState("");
+  const [wifiConfigStatus, setWifiConfigStatus] = useState("");
+  
+  // Loading state for WiFi reconnection
+  const [isWaitingForReconnection, setIsWaitingForReconnection] = useState(false);
+  const [reconnectionStartTime, setReconnectionStartTime] = useState(null);
+  const [lastTelemetryTime, setLastTelemetryTime] = useState(null);
+  const [showDashboard, setShowDashboard] = useState(true);
+  const [savingWifiSSID, setSavingWifiSSID] = useState(""); // Store SSID being saved for loading screen
   
   const chartRef = useRef(null);
   const historyChartRef = useRef(null);
@@ -44,8 +60,29 @@ export default function Home() {
     setData(json);
     setError(""); // Clear error on success
     
+    // Update last telemetry time - data is available
+    setLastTelemetryTime(Date.now());
+    
+    // If we're waiting for reconnection and data is coming, mark as ready
+    if (isWaitingForReconnection && json.wifiConnected) {
+      // Data is flowing and WiFi is connected - ready to show dashboard
+      setTimeout(() => {
+        setIsWaitingForReconnection(false);
+        setShowDashboard(true);
+        setWifiConfigStatus("success: ESP32 reconnected successfully! Dashboard is ready.");
+      }, 2000); // Small delay to ensure stable connection
+    }
+    
     if (json.device_id) {
       setDeviceId(json.device_id);
+    }
+    
+    // Update WiFi status from telemetry
+    if (json.wifiSSID !== undefined) {
+      setWifiSSID(json.wifiSSID);
+    }
+    if (json.wifiConnected !== undefined) {
+      setWifiConnected(json.wifiConnected);
     }
     
     if (json.manual !== undefined) setManual(json.manual);
@@ -205,6 +242,10 @@ export default function Home() {
         controlMessage.deviceName = name;
       }
       
+      if (params.startCharging !== undefined) {
+        controlMessage.startCharging = Boolean(params.startCharging);
+      }
+      
       if (Object.keys(controlMessage).length === 0) {
         throw new Error("No control parameters provided");
       }
@@ -229,6 +270,87 @@ export default function Home() {
     } catch (error) {
       // Re-throw to be caught by caller
       throw error;
+    }
+  };
+
+  // Send WiFi configuration via MQTT
+  const sendWifiConfig = async (ssid, password) => {
+    try {
+      if (!mqttClientRef.current || !mqttClientRef.current.connected) {
+        throw new Error("MQTT not connected");
+      }
+      
+      if (!deviceId) {
+        throw new Error("Device ID not available");
+      }
+      
+      if (!ssid || ssid.trim().length === 0) {
+        throw new Error("WiFi SSID cannot be empty");
+      }
+      
+      if (ssid.length > 32) {
+        throw new Error("WiFi SSID too long (max 32 characters)");
+      }
+      
+      if (password && password.length > 64) {
+        throw new Error("WiFi password too long (max 64 characters)");
+      }
+      
+      const controlTopic = `solar-tracker/${deviceId}/control`;
+      const controlMessage = {
+        wifiSSID: ssid.trim(),
+        wifiPassword: password || ""
+      };
+      
+      const messageStr = JSON.stringify(controlMessage);
+      
+      return new Promise((resolve, reject) => {
+        const result = mqttClientRef.current.publish(controlTopic, messageStr, { qos: 1 }, (err) => {
+          if (err) {
+            reject(new Error(`Failed to send WiFi config: ${err.message}`));
+          } else {
+            console.log(`✅ WiFi config published to ${controlTopic}`);
+            resolve();
+          }
+        });
+        
+        if (!result) {
+          reject(new Error("Failed to publish WiFi config"));
+        }
+      });
+    } catch (error) {
+      throw error;
+    }
+  };
+
+  // Handle WiFi configuration save
+  const handleSaveWifi = async () => {
+    if (!newWifiSSID.trim()) {
+      setWifiConfigStatus("error: Please enter WiFi network name");
+      return;
+    }
+    
+    setWifiConfigStatus("saving...");
+    
+    try {
+      await sendWifiConfig(newWifiSSID.trim(), newWifiPassword);
+      setWifiConfigStatus("success: WiFi credentials sent! Waiting for ESP32 to reconnect...");
+      
+      // Start waiting for reconnection
+      const savedSSID = newWifiSSID.trim();
+      setIsWaitingForReconnection(true);
+      setReconnectionStartTime(Date.now());
+      setSavingWifiSSID(savedSSID); // Store for loading screen display
+      setShowDashboard(false); // Hide dashboard while reconnecting
+      setNewWifiSSID("");
+      setNewWifiPassword("");
+      
+      // Reset last telemetry time to detect when new data arrives
+      setLastTelemetryTime(null);
+      
+    } catch (error) {
+      setWifiConfigStatus(`error: ${error.message}`);
+      setIsWaitingForReconnection(false);
     }
   };
 
@@ -307,6 +429,93 @@ export default function Home() {
       handleApiError(new Error(errorMsg), setHistoryError, "fetch history");
       console.error("History fetch error:", e);
       console.error("Failed URL:", fetchUrl);
+    }
+  };
+
+  // Load device name from database
+  const loadDeviceName = async () => {
+    if (!RAILWAY_API_BASE_URL) return;
+    
+    try {
+      const base = RAILWAY_API_BASE_URL.endsWith("/")
+        ? RAILWAY_API_BASE_URL.slice(0, -1)
+        : RAILWAY_API_BASE_URL;
+      const res = await fetch(`${base}/api/device`);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.device_name && !deviceNameInputFocusedRef.current) {
+          setDeviceName(json.device_name);
+          setCurrentDevice(json.device_name);
+        }
+      }
+    } catch (e) {
+      console.error("Failed to load device name:", e);
+      // Don't show error to user for this - it's okay if it fails
+    }
+  };
+
+  // Save device name to database
+  const saveDeviceName = async (name) => {
+    if (!RAILWAY_API_BASE_URL) return;
+    
+    try {
+      const base = RAILWAY_API_BASE_URL.endsWith("/")
+        ? RAILWAY_API_BASE_URL.slice(0, -1)
+        : RAILWAY_API_BASE_URL;
+      const res = await fetch(`${base}/api/device`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device_name: name.trim() })
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to save device name: ${res.status} ${res.statusText}`);
+      }
+    } catch (e) {
+      console.error("Failed to save device name:", e);
+      // Don't show error to user - MQTT command is more important
+    }
+  };
+
+  // Load grid price from database
+  const loadGridPrice = async () => {
+    if (!RAILWAY_API_BASE_URL) return;
+    
+    try {
+      const base = RAILWAY_API_BASE_URL.endsWith("/")
+        ? RAILWAY_API_BASE_URL.slice(0, -1)
+        : RAILWAY_API_BASE_URL;
+      const res = await fetch(`${base}/api/grid-price`);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.price !== null && json.price !== undefined && typeof window !== "undefined" && document.activeElement?.id !== "gridPrice") {
+          setGridPrice(json.price.toFixed(2));
+        }
+      }
+    } catch (e) {
+      console.error("Failed to load grid price:", e);
+      // Don't show error to user for this - it's okay if it fails
+    }
+  };
+
+  // Save grid price to database
+  const saveGridPrice = async (price) => {
+    if (!RAILWAY_API_BASE_URL) return;
+    
+    try {
+      const base = RAILWAY_API_BASE_URL.endsWith("/")
+        ? RAILWAY_API_BASE_URL.slice(0, -1)
+        : RAILWAY_API_BASE_URL;
+      const res = await fetch(`${base}/api/grid-price`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ price: parseFloat(price) })
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to save grid price: ${res.status} ${res.statusText}`);
+      }
+    } catch (e) {
+      console.error("Failed to save grid price:", e);
+      // Don't show error to user - MQTT command is more important
     }
   };
 
@@ -400,10 +609,11 @@ export default function Home() {
         const price = parseFloat(gridPrice);
         if (isNaN(price) || price <= 0 || price >= 1000) {
           setError("Invalid price (must be 0 to 1000)");
-          setGridPrice("12.00");
+          setGridPrice("");
           return;
         }
         await sendControl({ newPrice: price });
+        await saveGridPrice(price);
       } catch (error) {
         handleControlError(error, setError, "update grid price");
       }
@@ -425,6 +635,8 @@ export default function Home() {
     // Only start if authenticated
     if (typeof window !== "undefined" && sessionStorage.getItem("isAuthenticated")) {
       loadHistory();
+      loadDeviceName();
+      loadGridPrice();
       const historyInterval = setInterval(loadHistory, 30000);
       return () => {
         clearInterval(historyInterval);
@@ -433,6 +645,63 @@ export default function Home() {
       };
     }
   }, [router]);
+
+  // Monitor WiFi reconnection status
+  useEffect(() => {
+    if (!isWaitingForReconnection) {
+      // Not waiting for reconnection - show dashboard if data is available
+      if (data && mqttConnected) {
+        setShowDashboard(true);
+      }
+      return;
+    }
+    
+    const checkInterval = setInterval(() => {
+      const now = Date.now();
+      const elapsed = now - (reconnectionStartTime || now);
+      
+      // Check if we've received telemetry data recently (within last 5 seconds)
+      const hasRecentData = lastTelemetryTime && (now - lastTelemetryTime) < 5000;
+      
+      // Check if WiFi is connected (from latest telemetry)
+      const isWifiConnected = wifiConnected;
+      
+      // If we have recent data and WiFi is connected, we're ready
+      if (hasRecentData && isWifiConnected && data) {
+        clearInterval(checkInterval);
+        setIsWaitingForReconnection(false);
+        setShowDashboard(true);
+        setWifiConfigStatus("success: ESP32 reconnected successfully! Dashboard is ready.");
+        return;
+      }
+      
+      // Timeout after 60 seconds
+      if (elapsed > 60000) {
+        clearInterval(checkInterval);
+        setIsWaitingForReconnection(false);
+        setShowDashboard(true); // Show dashboard anyway
+        setWifiConfigStatus("warning: Reconnection timeout. ESP32 may have fallen back to AP mode. Check device status.");
+      }
+    }, 1000); // Check every second
+    
+    return () => clearInterval(checkInterval);
+  }, [isWaitingForReconnection, reconnectionStartTime, lastTelemetryTime, wifiConnected, data, mqttConnected]);
+
+  // Determine if dashboard should be shown initially
+  useEffect(() => {
+    // Show dashboard if:
+    // 1. We have data from ESP32
+    // 2. MQTT is connected
+    // 3. We're not waiting for WiFi reconnection
+    if (data && mqttConnected && !isWaitingForReconnection) {
+      setShowDashboard(true);
+    } else if (!mqttConnected || !data) {
+      // Hide dashboard if no connection or no data (only on initial load)
+      if (!isWaitingForReconnection) {
+        setShowDashboard(false);
+      }
+    }
+  }, [data, mqttConnected, isWaitingForReconnection]);
 
   useEffect(() => {
     if (typeof window !== "undefined" && chartRef.current) {
@@ -532,6 +801,78 @@ export default function Home() {
           return acc + (parseFloat(parts[1]) || 0) / 1000.0;
         }, 0)
     : 0;
+
+  // Loading screen component
+  const LoadingScreen = ({ message, progress, isWaiting }) => {
+    return (
+      <div style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: '#0b1020',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 9999,
+        color: '#e6f0ff'
+      }}>
+        <div style={{
+          textAlign: 'center',
+          maxWidth: '400px',
+          padding: '40px'
+        }}>
+          {/* Animated spinner */}
+          <div style={{
+            width: '60px',
+            height: '60px',
+            border: '4px solid #2a3a5c',
+            borderTop: '4px solid #2fd27a',
+            borderRadius: '50%',
+            margin: '0 auto 30px',
+            animation: 'spin 1s linear infinite'
+          }} />
+          
+          <style jsx>{`
+            @keyframes spin {
+              0% { transform: rotate(0deg); }
+              100% { transform: rotate(360deg); }
+            }
+          `}</style>
+          
+          <h2 style={{ color: '#2fd27a', marginBottom: '15px', fontSize: '24px' }}>
+            {message || 'Connecting...'}
+          </h2>
+          
+          {progress && (
+            <div style={{
+              marginTop: '20px',
+              background: '#1b2547',
+              borderRadius: '8px',
+              padding: '15px',
+              fontSize: '14px',
+              color: '#9fb3d1',
+              lineHeight: '1.6'
+            }}>
+              {progress}
+            </div>
+          )}
+          
+          {isWaiting && (
+            <div style={{
+              marginTop: '20px',
+              fontSize: '12px',
+              color: '#9fb3d1'
+            }}>
+              This may take 10-30 seconds...
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   // Setup wizard removed - no longer needed for MQTT mode
   if (false) {
@@ -787,6 +1128,34 @@ export default function Home() {
         <title>Solar Tracker — ESP32</title>
         <meta name="viewport" content="width=device-width,initial-scale=1" />
       </Head>
+      
+      {/* Loading Screen - Show when waiting for reconnection or no data */}
+      {(!showDashboard || isWaitingForReconnection) && (
+        <LoadingScreen
+          message={
+            isWaitingForReconnection 
+              ? "ESP32 is reconnecting to WiFi..."
+              : !mqttConnected
+              ? "Connecting to MQTT broker..."
+              : !data
+              ? "Waiting for device data..."
+              : "Loading dashboard..."
+          }
+          progress={
+            isWaitingForReconnection
+              ? `WiFi credentials sent. ESP32 is connecting to "${savingWifiSSID || wifiSSID}"...`
+              : !mqttConnected
+              ? "Establishing MQTT connection..."
+              : !data
+              ? "Waiting for telemetry data from ESP32..."
+              : null
+          }
+          isWaiting={isWaitingForReconnection}
+        />
+      )}
+      
+      {/* Main Dashboard - Only show when ready */}
+      {showDashboard && !isWaitingForReconnection && (
       <div className="wrap">
         <div className="header">
           <div className="header-left">
@@ -852,6 +1221,151 @@ export default function Home() {
           </div>
         )}
 
+        {/* WiFi Configuration Section */}
+        <div style={{ marginBottom: '20px', padding: '20px', background: '#121a33', borderRadius: '14px', border: '1px solid #1b2547' }}>
+          <h3 style={{ color: '#2fd27a', marginBottom: '15px', fontSize: '18px', fontWeight: '600' }}>WiFi Configuration</h3>
+          
+          {/* Current WiFi Status */}
+          <div style={{ marginBottom: '15px', padding: '12px', background: '#0d142b', borderRadius: '8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+              <div>
+                <strong style={{ color: '#e6f0ff', fontSize: '14px' }}>Current WiFi:</strong>
+                <span style={{ color: wifiConnected ? '#2fd27a' : '#f5b342', marginLeft: '10px', fontSize: '14px' }}>
+                  {wifiSSID || 'Not configured'}
+                </span>
+                {wifiConnected && (
+                  <span style={{ color: '#2fd27a', marginLeft: '10px', fontSize: '12px' }}>✓ Connected</span>
+                )}
+                {!wifiConnected && wifiSSID && (
+                  <span style={{ color: '#f5b342', marginLeft: '10px', fontSize: '12px' }}>⚠ Not connected</span>
+                )}
+              </div>
+              <button
+                onClick={() => setShowWifiConfig(!showWifiConfig)}
+                style={{
+                  padding: '8px 16px',
+                  background: showWifiConfig ? '#2a3a5c' : '#2fd27a',
+                  color: showWifiConfig ? '#9fb3d1' : '#0b1020',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontWeight: '600',
+                  fontSize: '13px'
+                }}
+              >
+                {showWifiConfig ? 'Cancel' : wifiSSID ? 'Change WiFi' : 'Configure WiFi'}
+              </button>
+            </div>
+          </div>
+          
+          {/* WiFi Configuration Form */}
+          {showWifiConfig && (
+            <div style={{ padding: '15px', background: '#0d142b', borderRadius: '8px' }}>
+              <div style={{ marginBottom: '15px' }}>
+                <label style={{ display: 'block', color: '#e6f0ff', marginBottom: '5px', fontSize: '13px', fontWeight: '500' }}>
+                  WiFi Network Name (SSID) *
+                </label>
+                <input
+                  type="text"
+                  value={newWifiSSID}
+                  onChange={(e) => setNewWifiSSID(e.target.value)}
+                  placeholder="Enter WiFi network name"
+                  maxLength={32}
+                  style={{
+                    width: '100%',
+                    padding: '10px',
+                    background: '#1b2547',
+                    border: '1px solid #2a3a5c',
+                    borderRadius: '6px',
+                    color: '#e6f0ff',
+                    fontSize: '14px',
+                    boxSizing: 'border-box'
+                  }}
+                />
+              </div>
+              
+              <div style={{ marginBottom: '15px' }}>
+                <label style={{ display: 'block', color: '#e6f0ff', marginBottom: '5px', fontSize: '13px', fontWeight: '500' }}>
+                  WiFi Password
+                </label>
+                <input
+                  type="password"
+                  value={newWifiPassword}
+                  onChange={(e) => setNewWifiPassword(e.target.value)}
+                  placeholder="Enter WiFi password (if required)"
+                  maxLength={64}
+                  style={{
+                    width: '100%',
+                    padding: '10px',
+                    background: '#1b2547',
+                    border: '1px solid #2a3a5c',
+                    borderRadius: '6px',
+                    color: '#e6f0ff',
+                    fontSize: '14px',
+                    boxSizing: 'border-box'
+                  }}
+                />
+              </div>
+              
+              {wifiConfigStatus && (
+                <div style={{
+                  padding: '10px',
+                  marginBottom: '15px',
+                  borderRadius: '6px',
+                  background: wifiConfigStatus.startsWith('error') ? 'rgba(245, 179, 66, 0.1)' : 
+                              wifiConfigStatus.startsWith('success') ? 'rgba(47, 210, 122, 0.1)' : 
+                              wifiConfigStatus.startsWith('warning') ? 'rgba(245, 179, 66, 0.1)' :
+                              'rgba(47, 210, 122, 0.1)',
+                  border: `1px solid ${wifiConfigStatus.startsWith('error') ? 'rgba(245, 179, 66, 0.3)' : 
+                                  wifiConfigStatus.startsWith('success') ? 'rgba(47, 210, 122, 0.3)' : 
+                                  wifiConfigStatus.startsWith('warning') ? 'rgba(245, 179, 66, 0.3)' :
+                                  'rgba(47, 210, 122, 0.3)'}`,
+                  color: wifiConfigStatus.startsWith('error') || wifiConfigStatus.startsWith('warning') ? '#f5b342' : '#2fd27a',
+                  fontSize: '13px',
+                  lineHeight: '1.5'
+                }}>
+                  {wifiConfigStatus.replace(/^(error|success|warning|saving):\s*/, '')}
+                </div>
+              )}
+              
+              <button
+                onClick={handleSaveWifi}
+                disabled={!newWifiSSID.trim() || wifiConfigStatus === 'saving...'}
+                style={{
+                  width: '100%',
+                  padding: '12px',
+                  background: newWifiSSID.trim() && wifiConfigStatus !== 'saving...' ? '#2fd27a' : '#1b2547',
+                  color: newWifiSSID.trim() && wifiConfigStatus !== 'saving...' ? '#0b1020' : '#9fb3d1',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: newWifiSSID.trim() && wifiConfigStatus !== 'saving...' ? 'pointer' : 'not-allowed',
+                  fontWeight: '600',
+                  fontSize: '14px'
+                }}
+              >
+                {wifiConfigStatus === 'saving...' ? 'Saving...' : 'Save & Connect'}
+              </button>
+              
+              {!wifiConnected && (
+                <div style={{
+                  marginTop: '15px',
+                  padding: '10px',
+                  background: 'rgba(245, 179, 66, 0.1)',
+                  border: '1px solid rgba(245, 179, 66, 0.3)',
+                  borderRadius: '6px',
+                  color: '#f5b342',
+                  fontSize: '12px',
+                  lineHeight: '1.5'
+                }}>
+                  <strong>Note:</strong> If ESP32 is not connected to WiFi, it cannot receive MQTT messages. 
+                  In that case, connect to the ESP32's AP network (<code style={{ background: 'rgba(0,0,0,0.3)', padding: '2px 4px', borderRadius: '3px' }}>Solar_Capstone_Admin</code>) 
+                  and configure WiFi via <code style={{ background: 'rgba(0,0,0,0.3)', padding: '2px 4px', borderRadius: '3px' }}>http://192.168.4.1/wifi-setup</code>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         <div className="status-grid">
           <div className="status-card">
             <div className="label">Site Summary</div>
@@ -893,18 +1407,6 @@ export default function Home() {
                   <div className="label">Phones Charged</div>
                   <div className="value">
                     {data?.phones !== undefined ? data.phones.toFixed(2) : "--"}
-                  </div>
-                </div>
-                <div className="kpi">
-                  <div className="label">Phone Use</div>
-                  <div className="value">
-                    {data?.phoneMinutes !== undefined ? Math.round(data.phoneMinutes) : "--"} min
-                  </div>
-                </div>
-                <div className="kpi">
-                  <div className="label">₱ Saved</div>
-                  <div className="value">
-                    ₱{data?.pesos !== undefined ? data.pesos.toFixed(2) : "--"}
                   </div>
                 </div>
                 <div className="kpi">
@@ -1042,6 +1544,7 @@ export default function Home() {
                         if (newName.trim().length > 0 && newName.trim().length <= 24) {
                           try {
                             await sendControl({ deviceName: newName.trim() });
+                            await saveDeviceName(newName.trim());
                           } catch (error) {
                             handleControlError(error, setError, "update device name");
                           }
@@ -1055,8 +1558,30 @@ export default function Home() {
                 <div style={{ marginBottom: "12px", fontSize: "13px", color: "var(--ink)" }}>
                   Current Device: <span className="mono" style={{ fontWeight: "600" }}>{currentDevice}</span>
                 </div>
+                <button
+                  className="manual-btn"
+                  style={{ width: "100%", marginTop: "8px" }}
+                  onClick={async () => {
+                    try {
+                      await sendControl({ startCharging: true });
+                      setChargingStarted(true);
+                      setError("");
+                    } catch (error) {
+                      handleControlError(error, setError, "start charging");
+                    }
+                  }}
+                  disabled={!mqttConnected || !deviceId}
+                >
+                  {chargingStarted ? "Charging Started ✓" : "Start Charging"}
+                </button>
+              </div>
+            </div>
+
+            <div className="card">
+              <h3>Batelec Grid Price</h3>
+              <div className="content" style={{ padding: "12px 14px" }}>
                 <div className="form-group">
-                  <label htmlFor="gridPrice">Batelec Grid Price (cents/kWh)</label>
+                  <label htmlFor="gridPrice">Grid Price (cents/kWh)</label>
                   <input
                     type="number"
                     id="gridPrice"
@@ -1258,8 +1783,7 @@ export default function Home() {
           </div>
         </div>
         <footer>Charge phones with sunshine — savings and impact shown are based on actual tracker readings and energy estimates.</footer>
-      </div>
-      <style jsx global>{`
+        <style jsx global>{`
         :root {
           --bg: #0b1020;
           --card: #121a33;
@@ -1640,6 +2164,8 @@ export default function Home() {
           color: #2fd27a;
         }
       `}</style>
+        </div>
+      )}
     </>
   );
 }

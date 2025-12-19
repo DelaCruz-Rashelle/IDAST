@@ -1,7 +1,7 @@
 -- MySQL schema for ESP32 telemetry snapshots (Railway MySQL)
 -- 
 -- NOTE: This schema is now automatically applied when the backend starts.
--- The initSchema() function in backend/src/db.js creates this table on startup.
+-- The initSchema() function in backend/src/db.js creates these tables on startup.
 -- 
 -- This file is kept for reference/documentation purposes.
 -- You can still use it manually if needed, but it's not required.
@@ -46,4 +46,22 @@ CREATE TABLE IF NOT EXISTS telemetry (
   raw_json JSON NULL,
 
   INDEX idx_ts (ts)
+);
+
+-- Device table: stores device names from user input
+CREATE TABLE IF NOT EXISTS device (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  device_name VARCHAR(24) NOT NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_updated_at (updated_at)
+);
+
+-- Grid price table: stores Batelec grid price from user input
+CREATE TABLE IF NOT EXISTS grid_price (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  price DECIMAL(10,2) NOT NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_updated_at (updated_at)
 );

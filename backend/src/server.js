@@ -20,7 +20,7 @@ app.use((req, res, next) => {
   // Allow requests with matching origin
   if (origin && allowedOrigins.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
     res.setHeader("Access-Control-Allow-Credentials", "true");
   } else if (origin) {
@@ -180,6 +180,95 @@ app.get("/api/telemetry", asyncHandler(async (req, res) => {
   } catch (error) {
     handleDatabaseError(error, "telemetry query");
     throw error; // Re-throw to be caught by asyncHandler
+  }
+}, "API"));
+
+// Device endpoints: save and retrieve device name
+app.post("/api/device", asyncHandler(async (req, res) => {
+  const { device_name } = req.body;
+  
+  if (!device_name || typeof device_name !== "string") {
+    const error = new Error("device_name is required and must be a string");
+    error.statusCode = 400;
+    throw error;
+  }
+  
+  if (device_name.length > 24) {
+    const error = new Error("device_name must be 24 characters or less");
+    error.statusCode = 400;
+    throw error;
+  }
+  
+  try {
+    // Insert new device name record
+    const [result] = await pool.query(
+      "INSERT INTO device (device_name) VALUES (?)",
+      [device_name.trim()]
+    );
+    
+    return res.json({ ok: true, id: result.insertId, device_name: device_name.trim() });
+  } catch (error) {
+    handleDatabaseError(error, "device insert");
+    throw error;
+  }
+}, "API"));
+
+app.get("/api/device", asyncHandler(async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      "SELECT device_name FROM device ORDER BY updated_at DESC, id DESC LIMIT 1"
+    );
+    const device_name = rows?.[0]?.device_name || null;
+    return res.json({ ok: true, device_name });
+  } catch (error) {
+    handleDatabaseError(error, "device query");
+    throw error;
+  }
+}, "API"));
+
+// Grid price endpoints: save and retrieve grid price
+app.post("/api/grid-price", asyncHandler(async (req, res) => {
+  const { price } = req.body;
+  
+  if (price === undefined || price === null) {
+    const error = new Error("price is required");
+    error.statusCode = 400;
+    throw error;
+  }
+  
+  const priceNum = Number(price);
+  if (!Number.isFinite(priceNum) || priceNum <= 0 || priceNum >= 1000) {
+    const error = new Error("price must be a number between 0 and 1000");
+    error.statusCode = 400;
+    throw error;
+  }
+  
+  try {
+    // Insert new grid price record
+    const [result] = await pool.query(
+      "INSERT INTO grid_price (price) VALUES (?)",
+      [priceNum]
+    );
+    
+    return res.json({ ok: true, id: result.insertId, price: priceNum });
+  } catch (error) {
+    handleDatabaseError(error, "grid_price insert");
+    throw error;
+  }
+}, "API"));
+
+app.get("/api/grid-price", asyncHandler(async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      "SELECT price FROM grid_price ORDER BY updated_at DESC, id DESC LIMIT 1"
+    );
+    const price = rows?.[0]?.price !== null && rows?.[0]?.price !== undefined 
+      ? Number(rows[0].price) 
+      : null;
+    return res.json({ ok: true, price });
+  } catch (error) {
+    handleDatabaseError(error, "grid_price query");
+    throw error;
   }
 }, "API"));
 

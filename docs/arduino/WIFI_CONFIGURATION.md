@@ -173,6 +173,23 @@ The WiFi setup page (`/wifi-setup`) is accessible when:
 5. Click "Save WiFi"
 6. ESP32 will reconnect with new credentials
 
+### Automatic Network Detection
+
+**Important:** The ESP32 automatically detects when the stored WiFi network is not available:
+
+1. **On Boot/Reconnect**: ESP32 scans for available networks
+2. **Network Found**: If the stored SSID is found, ESP32 attempts to connect
+3. **Network Not Found**: If the stored SSID is NOT found in the scan, ESP32 immediately:
+   - Skips the connection attempt (saves time)
+   - Falls back to AP mode automatically
+   - Displays clear instructions for reconfiguration
+
+**This means:**
+- ✅ When you change your WiFi network, ESP32 will detect it's not available
+- ✅ ESP32 will automatically start in AP mode for reconfiguration
+- ✅ No need to manually clear old credentials - just reconfigure via web interface
+- ✅ No wasted time trying to connect to non-existent networks
+
 ### Troubleshooting
 
 #### ESP32 Won't Connect to WiFi
@@ -187,13 +204,17 @@ The WiFi setup page (`/wifi-setup`) is accessible when:
 - **Wrong password**: Double-check password spelling
 - **Network not found**: Ensure network is 2.4GHz and in range
 - **Timeout**: Network may be slow to respond, try again
+- **Old network stored**: If you changed your WiFi network, ESP32 will detect it's not available and fall back to AP mode automatically
 
 #### Can't Access Dashboard After WiFi Change
 
 **Solution:**
-1. ESP32 will fall back to AP mode if WiFi connection fails
-2. Reconnect to `Solar_Capstone_Admin` AP
-3. Reconfigure WiFi with correct credentials
+1. ESP32 will automatically detect when the stored network is not available
+2. ESP32 will fall back to AP mode automatically
+3. Reconnect to `Solar_Capstone_Admin` AP (password: `12345678`)
+4. Open `http://192.168.4.1/wifi-setup` in your browser
+5. Reconfigure WiFi with the new network credentials
+6. ESP32 will connect to the new network automatically
 
 #### Forgot WiFi Password
 
@@ -279,6 +300,35 @@ Possible improvements:
 - **WiFi setup page** must be accessed locally (when connected to ESP32's AP network)
 - **Deployed Vercel app** does not need direct access to ESP32 (uses MQTT)
 - **No tunneling required** - ESP32 connects directly to EMQX Cloud via MQTT
+
+### What Happens When You Upload New Code?
+
+**WiFi credentials persist across code uploads:**
+- WiFi credentials are stored in **Preferences (NVS)** - non-volatile storage
+- When you compile and upload new code, **Preferences are NOT cleared**
+- ESP32 will still have the old WiFi credentials stored
+- On boot, ESP32 will:
+  1. Load the stored WiFi credentials from Preferences
+  2. Scan for available networks
+  3. If the stored network is found → connect to it
+  4. If the stored network is NOT found → automatically fall back to AP mode
+
+**If you changed your WiFi network:**
+- ESP32 will detect the old network is not available
+- ESP32 will automatically start in AP mode
+- Connect to `Solar_Capstone_Admin` AP and reconfigure WiFi
+- No need to manually clear old credentials
+
+**To clear WiFi credentials manually (if needed):**
+- Use the web interface to configure new WiFi (overwrites old credentials)
+- Or add this code temporarily to clear Preferences:
+  ```cpp
+  Preferences settings;
+  settings.begin("solar_rx", false);
+  settings.remove("wifiSSID");
+  settings.remove("wifiPassword");
+  settings.end();
+  ```
 
 This implementation makes the ESP32 much more user-friendly and eliminates the need for USB connections, tunneling, or constant redeployments!
 
