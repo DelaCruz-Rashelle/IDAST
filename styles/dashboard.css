@@ -147,6 +147,10 @@ body {
   flex: 0 0 auto;
 }
 
+.right-column-container > .card.card-auto-fit .form-group:last-child {
+  margin-bottom: 0;
+}
+
 .card h3 {
   margin: 0;
   padding: 14px 16px;
@@ -288,6 +292,14 @@ input[type="number"] {
   color: var(--ink);
   font-size: 13px;
   width: 100%;
+  -moz-appearance: textfield; /* Firefox */
+  appearance: textfield; /* Standard */
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none; /* Chrome, Safari, Edge */
+  margin: 0;
 }
 
 input[type="text"]:focus,

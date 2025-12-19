@@ -19,6 +19,7 @@ export default function Home() {
   const [panValue, setPanValue] = useState(90);
   const [deviceName, setDeviceName] = useState("");
   const [gridPrice, setGridPrice] = useState("");
+  const [savedGridPrice, setSavedGridPrice] = useState(null); // Track saved price for calculations
   const [currentDevice, setCurrentDevice] = useState("Unknown");
   const [sliderActive, setSliderActive] = useState({ tilt: false, pan: false });
   const [error, setError] = useState("");
@@ -28,6 +29,8 @@ export default function Home() {
   const [chargingStarted, setChargingStarted] = useState(false);
   const deviceNameInputFocusedRef = useRef(false);
   const deviceNameDebounceRef = useRef(null);
+  const gridPriceInputFocusedRef = useRef(false);
+  const gridPriceLoadedFromDbRef = useRef(false);
   const mqttClientRef = useRef(null);
   const mqttConnectingRef = useRef(false); // Prevent multiple simultaneous connection attempts
   
@@ -67,7 +70,13 @@ export default function Home() {
       setCurrentDevice(json.deviceName);
       setDeviceName(json.deviceName);
     }
-    if (json.gridPrice && typeof window !== "undefined" && document.activeElement?.id !== "gridPrice") {
+    // Only update grid price from telemetry if:
+    // 1. Input is not focused
+    // 2. We haven't loaded a price from the database yet (to preserve user's saved value)
+    if (json.gridPrice && typeof window !== "undefined" && 
+        document.activeElement?.id !== "gridPrice" && 
+        !gridPriceInputFocusedRef.current &&
+        !gridPriceLoadedFromDbRef.current) {
       setGridPrice(json.gridPrice.toFixed(2));
     }
     if (!sliderActive.tilt && json.tiltAngle !== undefined) {
@@ -512,7 +521,10 @@ export default function Home() {
       if (res.ok) {
         const json = await res.json();
         if (json.price !== null && json.price !== undefined && typeof window !== "undefined" && document.activeElement?.id !== "gridPrice") {
-          setGridPrice(json.price.toFixed(2));
+          const price = json.price.toFixed(2);
+          setGridPrice(price);
+          setSavedGridPrice(parseFloat(price)); // Set saved price for calculations
+          gridPriceLoadedFromDbRef.current = true; // Mark that we've loaded from DB
         }
       }
     } catch (e) {
@@ -537,9 +549,11 @@ export default function Home() {
       if (!res.ok) {
         throw new Error(`Failed to save grid price: ${res.status} ${res.statusText}`);
       }
+      // Mark that we've saved to DB, so telemetry won't overwrite it
+      gridPriceLoadedFromDbRef.current = true;
     } catch (e) {
       console.error("Failed to save grid price:", e);
-      // Don't show error to user - MQTT command is more important
+      throw e; // Re-throw so caller can handle error
     }
   };
 
@@ -623,25 +637,22 @@ export default function Home() {
     ctx.fillText("Time →", canvas.width - 20, canvas.height - 10);
   };
 
-  // Handle price change
-  const handlePriceChange = () => {
-    if (gridPriceDebounceRef.current) {
-      clearTimeout(gridPriceDebounceRef.current);
-    }
-    gridPriceDebounceRef.current = setTimeout(async () => {
-      try {
-        const price = parseFloat(gridPrice);
-        if (isNaN(price) || price <= 0 || price >= 1000) {
-          setError("Invalid price (must be 0 to 1000)");
-          setGridPrice("");
-          return;
-        }
-        await sendControl({ newPrice: price });
-        await saveGridPrice(price);
-      } catch (error) {
-        handleControlError(error, setError, "update grid price");
+  // Handle grid price save
+  const handleSaveGridPrice = async () => {
+    try {
+      const price = parseFloat(gridPrice);
+      if (isNaN(price) || price <= 0 || price >= 1000) {
+        setError("Invalid price (must be 0 to 1000)");
+        setGridPrice("");
+        return;
       }
-    }, 2500);
+      await sendControl({ newPrice: price });
+      await saveGridPrice(price);
+      setSavedGridPrice(price); // Mark as saved for calculations
+      setError("");
+    } catch (error) {
+      handleControlError(error, setError, "save grid price");
+    }
   };
 
   // Check authentication on mount
@@ -1054,6 +1065,16 @@ export default function Home() {
                   className="manual-btn full-width mt-8"
                   onClick={async () => {
                     try {
+                      // Save device name to database if it's been entered
+                      if (deviceName && deviceName.trim().length > 0 && deviceName.trim().length <= 24) {
+                        const trimmedName = deviceName.trim();
+                        await saveDeviceName(trimmedName);
+                        // Update currentDevice state immediately so it doesn't revert to "Unknown"
+                        setCurrentDevice(trimmedName);
+                        // Also send device name via MQTT to ensure it's synced
+                        await sendControl({ deviceName: trimmedName });
+                      }
+                      // Send start charging command
                       await sendControl({ startCharging: true });
                       setChargingStarted(true);
                       setError("");
@@ -1073,19 +1094,38 @@ export default function Home() {
               <div className="content" style={{ padding: "12px 14px" }}>
                 <div className="form-group">
                   <label htmlFor="gridPrice">Grid Price (cents/kWh)</label>
-                  <input
-                    type="number"
-                    id="gridPrice"
-                    value={gridPrice}
-                    onChange={(e) => {
-                      setGridPrice(e.target.value);
-                      handlePriceChange();
-                    }}
-                    placeholder="20.00"
-                    step="0.01"
-                    min="0"
-                    max="1000"
-                  />
+                  <div style={{ display: "flex", gap: "8px", alignItems: "flex-end" }}>
+                    <input
+                      type="number"
+                      id="gridPrice"
+                      value={gridPrice}
+                      onFocus={() => { gridPriceInputFocusedRef.current = true; }}
+                      onBlur={() => {
+                        gridPriceInputFocusedRef.current = false;
+                      }}
+                      onChange={(e) => {
+                        setGridPrice(e.target.value);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          handleSaveGridPrice();
+                        }
+                      }}
+                      placeholder="20.00"
+                      step="0.01"
+                      min="0"
+                      max="1000"
+                      style={{ flex: "1", minWidth: "0" }}
+                    />
+                    <button
+                      className="manual-btn"
+                      onClick={handleSaveGridPrice}
+                      disabled={!mqttConnected || !deviceId || !gridPrice || isNaN(parseFloat(gridPrice)) || parseFloat(gridPrice) <= 0 || parseFloat(gridPrice) >= 1000}
+                      style={{ whiteSpace: "nowrap" }}
+                    >
+                      Save
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1213,7 +1253,11 @@ export default function Home() {
                     </tr>
                     <tr>
                       <td>Estimated Savings</td>
-                      <td>₱{(totalEnergyKWh * parseFloat(gridPrice || 12)).toFixed(2)}</td>
+                      <td>
+                        {savedGridPrice !== null
+                          ? `₱${(totalEnergyKWh * savedGridPrice).toFixed(2)}`
+                          : "— (Save grid price to calculate)"}
+                      </td>
                     </tr>
                     <tr>
                       <td>Most Active Device</td>
