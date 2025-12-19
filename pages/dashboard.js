@@ -29,6 +29,7 @@ export default function Home() {
   const deviceNameInputFocusedRef = useRef(false);
   const deviceNameDebounceRef = useRef(null);
   const mqttClientRef = useRef(null);
+  const mqttConnectingRef = useRef(false); // Prevent multiple simultaneous connection attempts
   
   // WiFi configuration state
   const [wifiSSID, setWifiSSID] = useState("");
@@ -138,8 +139,20 @@ export default function Home() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     
+    // Prevent multiple simultaneous connection attempts
+    if (mqttConnectingRef.current) {
+      console.log("MQTT connection already in progress, skipping");
+      return;
+    }
+    
     if (!MQTT_BROKER_URL) {
       setError("MQTT broker URL not configured. Please set NEXT_PUBLIC_MQTT_BROKER_URL in Vercel environment variables.");
+      return;
+    }
+    
+    // Prevent multiple connections
+    if (mqttClientRef.current && mqttClientRef.current.connected) {
+      console.log("MQTT already connected, skipping new connection");
       return;
     }
     
@@ -154,10 +167,16 @@ export default function Home() {
     const connectOptions = {
       clientId,
       clean: true,
-      reconnectPeriod: 5000,
-      connectTimeout: 10000,
+      reconnectPeriod: 10000, // Increased to 10 seconds to prevent rapid reconnects
+      connectTimeout: 15000, // Increased timeout
       keepalive: 60, // Send ping every 60 seconds
       reschedulePings: true, // Reschedule pings if connection is busy
+      will: {
+        topic: `solar-tracker/dashboard/${clientId}/status`,
+        payload: JSON.stringify({ status: 'offline' }),
+        qos: 1,
+        retain: false
+      }
     };
     
     if (MQTT_USERNAME && MQTT_PASSWORD) {
@@ -166,99 +185,137 @@ export default function Home() {
     }
     
     console.log("Connecting to MQTT broker:", MQTT_BROKER_URL);
+    mqttConnectingRef.current = true;
     
-    // Prevent multiple connections
-    if (mqttClientRef.current && mqttClientRef.current.connected) {
-      console.log("MQTT already connected, skipping new connection");
-      return;
-    }
-    
-    // Clean up any existing connection first
-    if (mqttClientRef.current) {
+    // Define connection function
+    function createMqttConnection() {
       try {
-        mqttClientRef.current.end(true); // Force disconnect
-      } catch (e) {
-        console.log("Error closing existing connection:", e);
-      }
-    }
+        const client = mqtt.connect(MQTT_BROKER_URL, connectOptions);
+        mqttClientRef.current = client;
     
-    const client = mqtt.connect(MQTT_BROKER_URL, connectOptions);
-    mqttClientRef.current = client;
-    
-    client.on("connect", () => {
-      console.log("✅ MQTT connected");
-      setMqttConnected(true);
-      setError("");
-      
-      // Subscribe to all device telemetry topics
-      const telemetryTopic = "solar-tracker/+/telemetry";
-      client.subscribe(telemetryTopic, { qos: 1 }, (err) => {
-        if (err) {
-          console.error("Failed to subscribe to telemetry:", err);
-          setError(`Failed to subscribe to MQTT topic: ${err.message}`);
-        } else {
-          console.log(`✅ Subscribed to: ${telemetryTopic}`);
-        }
-      });
-      
-      // Subscribe to status topics
-      const statusTopic = "solar-tracker/+/status";
-      client.subscribe(statusTopic, { qos: 1 }, (err) => {
-        if (err) {
-          console.error("Failed to subscribe to status:", err);
-        } else {
-          console.log(`✅ Subscribed to: ${statusTopic}`);
-        }
-      });
-    });
-    
-    client.on("message", (topic, message) => {
-      try {
-        const json = JSON.parse(message.toString());
+        client.on("connect", () => {
+          console.log("✅ MQTT connected");
+          mqttConnectingRef.current = false;
+          setMqttConnected(true);
+          setError("");
+          
+          // Subscribe to all device telemetry topics
+          const telemetryTopic = "solar-tracker/+/telemetry";
+          client.subscribe(telemetryTopic, { qos: 1 }, (err) => {
+            if (err) {
+              console.error("Failed to subscribe to telemetry:", err);
+              setError(`Failed to subscribe to MQTT topic: ${err.message}`);
+            } else {
+              console.log(`✅ Subscribed to: ${telemetryTopic}`);
+            }
+          });
+          
+          // Subscribe to status topics
+          const statusTopic = "solar-tracker/+/status";
+          client.subscribe(statusTopic, { qos: 1 }, (err) => {
+            if (err) {
+              console.error("Failed to subscribe to status:", err);
+            } else {
+              console.log(`✅ Subscribed to: ${statusTopic}`);
+            }
+          });
+        });
         
-        if (topic.includes("/telemetry")) {
-          processTelemetryMessage(json);
-          // Extract device_id from telemetry for control commands
-          if (json.device_id && !deviceId) {
-            setDeviceId(json.device_id);
+        client.on("message", (topic, message) => {
+          try {
+            const json = JSON.parse(message.toString());
+            
+            if (topic.includes("/telemetry")) {
+              processTelemetryMessage(json);
+              // Extract device_id from telemetry for control commands
+              if (json.device_id && !deviceId) {
+                setDeviceId(json.device_id);
+              }
+            } else if (topic.includes("/status")) {
+              console.log("Status update:", json);
+              if (json.device_id && !deviceId) {
+                setDeviceId(json.device_id);
+              }
+            }
+          } catch (err) {
+            console.error("Error parsing MQTT message:", err);
+            // Don't set error state for parsing errors - just log
           }
-        } else if (topic.includes("/status")) {
-          console.log("Status update:", json);
-          if (json.device_id && !deviceId) {
-            setDeviceId(json.device_id);
+        });
+        
+        client.on("error", (err) => {
+          console.error("MQTT error:", err);
+          mqttConnectingRef.current = false;
+          // Don't call handleMqttError if it's a close-related error to avoid loops
+          if (err.message && !err.message.includes("Close received after close")) {
+            handleMqttError(err, setError, setMqttConnected);
           }
+        });
+        
+        client.on("close", () => {
+          console.log("MQTT connection closed");
+          mqttConnectingRef.current = false;
+          setMqttConnected(false);
+        });
+        
+        client.on("reconnect", () => {
+          console.log("MQTT reconnecting...");
+          mqttConnectingRef.current = true;
+          setMqttConnected(false);
+        });
+        
+        client.on("offline", () => {
+          console.log("MQTT offline");
+          mqttConnectingRef.current = false;
+          setMqttConnected(false);
+        });
+        
+        // Handle WebSocket close errors specifically
+        // Handle WebSocket close errors specifically
+        if (client.stream && typeof client.stream.on === 'function') {
+          client.stream.on('error', (err) => {
+            if (err.message && err.message.includes('Close received after close')) {
+              console.warn("WebSocket close error (ignoring):", err.message);
+              // Don't trigger reconnection for this specific error
+              return;
+            }
+            console.error("WebSocket stream error:", err);
+          });
         }
       } catch (err) {
-        console.error("Error parsing MQTT message:", err);
-        // Don't set error state for parsing errors - just log
+        console.error("Error creating MQTT connection:", err);
+        mqttConnectingRef.current = false;
+        setError(`Failed to create MQTT connection: ${err.message}`);
       }
-    });
+    }
     
-    client.on("error", (err) => {
-      console.error("MQTT error:", err);
-      handleMqttError(err, setError, setMqttConnected);
-    });
-    
-    client.on("close", () => {
-      console.log("MQTT connection closed");
-      setMqttConnected(false);
-    });
-    
-    client.on("reconnect", () => {
-      console.log("MQTT reconnecting...");
-      setMqttConnected(false);
-    });
-    
-    client.on("offline", () => {
-      console.log("MQTT offline");
-      setMqttConnected(false);
-    });
+    // Clean up any existing connection first with a small delay
+    if (mqttClientRef.current) {
+      try {
+        // Remove all listeners first to prevent event handler conflicts
+        mqttClientRef.current.removeAllListeners();
+        mqttClientRef.current.end(true); // Force disconnect
+        // Wait a bit before creating new connection
+        setTimeout(() => {
+          createMqttConnection();
+        }, 500);
+        return;
+      } catch (e) {
+        console.log("Error closing existing connection:", e);
+        // Continue to create new connection even if cleanup failed
+        createMqttConnection();
+      }
+    } else {
+      createMqttConnection();
+    }
     
     // Cleanup on unmount
     return () => {
+      mqttConnectingRef.current = false;
       if (mqttClientRef.current) {
         console.log("Cleaning up MQTT connection");
         try {
+          mqttClientRef.current.removeAllListeners();
           mqttClientRef.current.end(true);
         } catch (e) {
           console.log("Error during cleanup:", e);
