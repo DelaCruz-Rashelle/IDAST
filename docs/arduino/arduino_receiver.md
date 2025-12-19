@@ -216,12 +216,11 @@ struct ControlPacket {
       Serial.println("   Device will fall back to AP mode.");
       Serial.println("   Configure new WiFi via deployed app (MQTT) when ESP32 reconnects.");
       
-      // Re-enable AP mode immediately since network is not available
-      // Note: AP mode is kept for potential reconnection, but configuration should be done via deployed app
-      WiFi.mode(WIFI_AP);
-      WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
+      // Keep AP+STA mode (AP is already active from initEspNow)
+      // This allows MQTT connection attempts even when no WiFi Station is configured
       Serial.printf("   AP IP: %s\n", WiFi.softAPIP().toString().c_str());
       Serial.println("   Waiting for WiFi configuration via deployed app (MQTT)...");
+      Serial.println("   Note: Connect a device to this AP and enable internet sharing to allow MQTT connection.");
       return;  // Skip connection attempt since network is not available
     }
     
@@ -255,8 +254,10 @@ struct ControlPacket {
       WiFi.mode(WIFI_STA);
       Serial.println("✅ AP mode disabled - device running in STA mode only");
       
-      // Initialize MQTT after WiFi connection
-      initMqtt();
+      // Initialize MQTT after WiFi connection (if not already initialized)
+      if (!mqttClient.connected()) {
+        initMqtt();
+      }
     } else {
       Serial.printf("❌ WiFi Station connection failed! Status code: %d\n", WiFi.status());
       Serial.println("   Possible reasons:");
@@ -265,11 +266,11 @@ struct ControlPacket {
       Serial.println("   - Network temporarily unavailable");
       Serial.println("   Device will continue in AP mode only");
       Serial.println("   Update WiFi credentials via deployed app (MQTT) when ESP32 reconnects.");
-      // Re-enable AP mode if STA connection fails
-      WiFi.mode(WIFI_AP);
-      WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
+      // Keep AP+STA mode to allow MQTT connection attempts
+      // (AP mode is already active from initEspNow)
       Serial.printf("   AP IP: %s\n", WiFi.softAPIP().toString().c_str());
       Serial.println("   Waiting for WiFi configuration via deployed app (MQTT)...");
+      Serial.println("   Note: Connect a device to this AP and enable internet sharing to allow MQTT connection.");
     }
   }
 
@@ -288,8 +289,9 @@ void reconnectWiFi() {
 }
 
   void initEspNow() {
-    // Start in AP mode (for initial setup only - WiFi config should be done via deployed app)
-    WiFi.mode(WIFI_AP);
+    // Start in AP+STA mode to allow both AP and Station connections
+    // This enables MQTT connection even when in AP mode (if internet is available)
+    WiFi.mode(WIFI_AP_STA);
     WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
     Serial.printf("📡 Receiver AP MAC: %s | channel: %u\n",
                   WiFi.softAPmacAddress().c_str(),
@@ -301,6 +303,11 @@ void reconnectWiFi() {
     
     // Then try to connect to WiFi Station (if configured)
     initWiFiStation();
+    
+    // Try to initialize MQTT even if only AP mode is active
+    // This allows receiving WiFi config via MQTT when in AP mode
+    // (if the connected device shares internet)
+    initMqtt();
     
     if (esp_now_init() != ESP_OK) {
       Serial.println("❌ ESP-NOW init failed");
@@ -465,8 +472,21 @@ void reconnectWiFi() {
   }
 
   void reconnectMqtt() {
-    if (WiFi.status() != WL_CONNECTED) {
-      return;  // Can't connect to MQTT without WiFi
+    // Allow MQTT connection attempt even in AP mode
+    // This enables WiFi config via MQTT when ESP32 is in AP mode
+    // (if the connected device shares internet through the AP)
+    // However, if WiFi Station is connected, prefer that
+    bool hasInternet = false;
+    if (WiFi.status() == WL_CONNECTED) {
+      hasInternet = true;
+    } else if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
+      // In AP mode, try to connect anyway (might have internet via connected device)
+      // This allows receiving WiFi config via MQTT even when in AP mode
+      hasInternet = true;  // Attempt connection - will fail gracefully if no internet
+    }
+    
+    if (!hasInternet) {
+      return;  // No WiFi interface available
     }
     
     if (mqttClient.connected()) {
@@ -481,7 +501,10 @@ void reconnectWiFi() {
     lastMqttReconnectAttempt = now;
     
     Serial.print("🔄 Attempting MQTT connection...");
+    Serial.printf("   WiFi Status: %d (0=IDLE, 3=CONNECTED, 2=AP, 5=AP_STA)\n", WiFi.status());
+    Serial.printf("   WiFi Mode: %d (1=STA, 2=AP, 3=AP_STA)\n", WiFi.getMode());
     String clientId = "ESP32-" + deviceId;
+    Serial.printf("   Client ID: %s\n", clientId.c_str());
     
     // Always use authentication (credentials are set in initMqtt)
     bool connected = mqttClient.connect(
@@ -883,7 +906,8 @@ void handle_wifi_setup() {
       return;
     }
     
-    Serial.printf("📥 MQTT control message received: %s\n", messageStr.c_str());
+    Serial.printf("📥 MQTT control message received on topic: %s\n", topicStr.c_str());
+    Serial.printf("   Message: %s\n", messageStr.c_str());
     
     // Parse WiFi configuration first (before other commands)
     // Expected format: {"wifiSSID": "MyNetwork", "wifiPassword": "password"}
