@@ -1234,33 +1234,9 @@ export default function Home() {
               <div className="history-meta">
                 <h4>Device highlights (rolling 60 days)</h4>
                 <ul id="historyHighlights">
-                  {historyData
-                    ? (() => {
-                        const lines = historyData.trim().split("\n").slice(1);
-                        const galaxyKWh = (
-                          lines
-                            .filter((l) => l.includes("Galaxy"))
-                            .reduce((acc, l) => acc + (parseFloat(l.split(",")[1]) || 0) / 1000.0, 0)
-                        ).toFixed(3);
-                        const iphoneKWh = (
-                          lines
-                            .filter((l) => l.includes("iPhone"))
-                            .reduce((acc, l) => acc + (parseFloat(l.split(",")[1]) || 0) / 1000.0, 0)
-                        ).toFixed(3);
-                        const tabletKWh = (
-                          lines
-                            .filter((l) => l.toLowerCase().includes("tablet"))
-                            .reduce((acc, l) => acc + (parseFloat(l.split(",")[1]) || 0) / 1000.0, 0)
-                        ).toFixed(3);
-                        return (
-                          <>
-                            <li>{galaxyKWh} kWh delivered to Galaxy S24 users.</li>
-                            <li>{iphoneKWh} kWh routed to iPhone 15 owners.</li>
-                            <li>{tabletKWh} kWh sustaining our community tablets.</li>
-                          </>
-                        );
-                      })()
-                    : null}
+                  <li className="muted" style={{ fontStyle: "italic" }}>
+                    No device highlights available yet. Register a device to start tracking energy delivery.
+                  </li>
                 </ul>
                 <table className="table" id="historySummary" style={{ marginTop: "8px" }}>
                   <thead>
