@@ -115,7 +115,7 @@ body {
 .right-column-container {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
   height: 100%;
   align-items: stretch;
 }

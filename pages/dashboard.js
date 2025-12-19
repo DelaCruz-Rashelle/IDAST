@@ -29,6 +29,7 @@ export default function Home() {
   const [chargingStarted, setChargingStarted] = useState(false);
   const deviceNameInputFocusedRef = useRef(false);
   const deviceNameDebounceRef = useRef(null);
+  const deviceNameLoadedFromDbRef = useRef(false);
   const gridPriceInputFocusedRef = useRef(false);
   const gridPriceLoadedFromDbRef = useRef(false);
   const mqttClientRef = useRef(null);
@@ -66,7 +67,15 @@ export default function Home() {
     }
     
     if (json.manual !== undefined) setManual(json.manual);
-    if (json.deviceName && !deviceNameInputFocusedRef.current) {
+    // Only update device name from telemetry if:
+    // 1. Input is not focused
+    // 2. We haven't loaded a device name from the database yet (to preserve user's saved value)
+    // 3. The telemetry value is not "Unknown" or empty
+    if (json.deviceName && 
+        !deviceNameInputFocusedRef.current && 
+        !deviceNameLoadedFromDbRef.current &&
+        json.deviceName.trim() !== "" &&
+        json.deviceName.trim().toLowerCase() !== "unknown") {
       setCurrentDevice(json.deviceName);
       setDeviceName(json.deviceName);
     }
@@ -479,6 +488,7 @@ export default function Home() {
         if (json.device_name && !deviceNameInputFocusedRef.current) {
           setDeviceName(json.device_name);
           setCurrentDevice(json.device_name);
+          deviceNameLoadedFromDbRef.current = true; // Mark that we've loaded from DB
         }
       }
     } catch (e) {
@@ -503,6 +513,8 @@ export default function Home() {
       if (!res.ok) {
         throw new Error(`Failed to save device name: ${res.status} ${res.statusText}`);
       }
+      // Mark that we've saved to DB, so telemetry won't overwrite it
+      deviceNameLoadedFromDbRef.current = true;
     } catch (e) {
       console.error("Failed to save device name:", e);
       // Don't show error to user - MQTT command is more important
@@ -1025,7 +1037,7 @@ export default function Home() {
           <div className="right-column-container">
             <div className="card card-auto-fit">
               <h3>Device Registration & Settings</h3>
-              <div className="content" style={{ padding: "12px 14px" }}>
+              <div className="content" style={{ padding: "12px 14px 16px 14px" }}>
                 <div className="form-group">
                   <label htmlFor="deviceName">Device Name</label>
                   <input
@@ -1091,10 +1103,10 @@ export default function Home() {
 
             <div className="card card-auto-fit">
               <h3>Batelec Grid Price</h3>
-              <div className="content" style={{ padding: "12px 14px" }}>
+              <div className="content" style={{ padding: "12px 14px 16px 14px" }}>
                 <div className="form-group">
                   <label htmlFor="gridPrice">Grid Price (cents/kWh)</label>
-                  <div style={{ display: "flex", gap: "8px", alignItems: "flex-end" }}>
+                  <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                     <input
                       type="number"
                       id="gridPrice"
