@@ -560,6 +560,46 @@ CREATE TABLE telemetry (
 - **JSON Storage**: `raw_json` column stores complete telemetry packet
 - **Nullable Fields**: Most fields nullable to handle missing data
 
+**Table: `device`**
+
+```sql
+CREATE TABLE device (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  device_name VARCHAR(24) NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_updated_at (updated_at)
+);
+```
+
+**Purpose:** Stores device names entered by users when starting a charging session.
+
+**Key Design Decisions:**
+- **Device Name Length**: Limited to 24 characters (matches ESP32 constraints)
+- **Timestamp Tracking**: `created_at` and `updated_at` for audit trail
+- **Latest Value**: Queries use `ORDER BY updated_at DESC` to get most recent value
+
+**Table: `grid_price`**
+
+```sql
+CREATE TABLE grid_price (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  price DECIMAL(10,2) NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_updated_at (updated_at)
+);
+```
+
+**Purpose:** Stores Batelec grid price values entered by users for savings calculations.
+
+**Key Design Decisions:**
+- **Price Validation**: Stored as `DECIMAL(10,2)` for precise currency calculations
+- **No Default Value**: Field starts empty, user must input and save
+- **Timestamp Tracking**: `created_at` and `updated_at` for audit trail
+- **Latest Value**: Queries use `ORDER BY updated_at DESC` to get most recent value
+- **Required for Calculations**: Estimated savings only calculated if price is saved
+
 ### Local Storage (ESP32)
 
 **File: `/history.csv`**

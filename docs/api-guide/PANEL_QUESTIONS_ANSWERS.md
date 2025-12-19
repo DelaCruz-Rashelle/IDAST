@@ -8,39 +8,42 @@ This document answers common questions about how the Solar Tracker system works 
 
 ### Where the Price Comes From
 
-The grid price can come from two places:
+The grid price comes from **user input only**:
 
 1. **User types it in the dashboard**
    - There's an input field on the dashboard where users can enter the price
-   - Default value is 12.00 cents/kWh
-   - The price must be between 0 and 1000
+   - **No default value** - the field starts empty
+   - The price must be between 0 and 1000 cents/kWh
+   - User must click the **"Save" button** to save the price
 
-2. **Received via MQTT from ESP32**
-   - ESP32 publishes grid price in telemetry messages via MQTT
-   - Dashboard receives it automatically when connected to MQTT
-   - This makes sure the dashboard shows the correct price
+**Important:** The grid price is **NOT** automatically updated from ESP32 telemetry. Users must manually enter and save the price.
 
 ### How It Gets Saved
 
 **Simple explanation:**
-1. User types a new price in the dashboard
-2. Dashboard publishes the new price via MQTT to the ESP32 (if control commands are enabled)
-3. The ESP32 receives it and saves it permanently in its memory
-4. The price stays saved even if the ESP32 is turned off and back on
-
-**Note:** In the current MQTT-based architecture, control commands may be disabled. Grid price is primarily set on the ESP32 device itself.
+1. User types a new price in the dashboard input field
+2. User clicks the **"Save" button**
+3. Dashboard saves the price to the **database** (MySQL `grid_price` table)
+4. Dashboard also sends the price via MQTT to the ESP32 (if control commands are enabled)
+5. The price stays saved in the database permanently
+6. When the dashboard loads, it retrieves the saved price from the database
 
 ### Where It's Saved
 
-**Location:** Inside the ESP32 device's permanent memory
+**Primary Location:** MySQL database on the backend server (Railway)
 
-- Think of it like saving a file on a computer - it's stored permanently
-- The ESP32 has special memory that doesn't get erased when power is turned off
-- It's saved with the name "gridPrice" in a storage area called "solar_rx"
-- When the ESP32 starts up, it automatically loads the saved price
-- If no price was saved before, it uses 12.0 cents/kWh as the default
+- Stored in the `grid_price` table
+- Saved permanently in the cloud database
+- Persists across browser sessions and device restarts
+- Each save creates a new record with a timestamp
 
-**In simple terms:** The price is saved directly on the ESP32 device, not on a server or in the cloud. It's like saving a setting on your phone - it stays there until you change it.
+**Secondary Location:** ESP32 device (if MQTT control is enabled)
+
+- Also sent to ESP32 via MQTT control commands
+- Saved in ESP32's permanent memory (Preferences)
+- Used by ESP32 for calculations
+
+**In simple terms:** The price is saved in the cloud database first, and also sent to the ESP32 device. The database is the primary storage location, ensuring the price persists even if the ESP32 is reset.
 
 ---
 
@@ -171,14 +174,17 @@ Different types of data are saved in different places. Most important data is sa
 
 #### 2. Grid Price - PERMANENT STORAGE
 
-**Location:** Inside the ESP32 device's permanent memory (like settings storage)
+**Location:** MySQL database on the backend server (Railway) - `grid_price` table
 
-- Saved with the name "gridPrice"
-- When you change the price, it's saved here
-- When the ESP32 starts up, it loads the saved price
-- **Important:** This stays saved even if you turn off the ESP32
+- Saved in the cloud database permanently
+- User must enter the price in the dashboard and click "Save"
+- No default value - field starts empty
+- When you change the price, it's saved to the database
+- When the dashboard loads, it retrieves the saved price from the database
+- **Important:** This stays saved in the cloud even if ESP32 is reset
+- Also sent to ESP32 via MQTT (if control commands enabled) for device-side calculations
 
-**Think of it like:** A setting on your phone that you change once and it remembers
+**Think of it like:** A cloud-based setting that persists across all devices and sessions
 
 #### 3. Real-Time Telemetry Data - AUTOMATICALLY SAVED
 
@@ -205,21 +211,23 @@ Different types of data are saved in different places. Most important data is sa
 ### Important Points to Remember
 
 1. **History data is stored in the cloud database** - safe and permanent
-2. **Grid price is stored on ESP32** - survives power cycles
-3. **Real-time data is automatically saved** - backend stores all telemetry
-4. **If ESP32 is reset** - history data is safe in the cloud database
-5. **No USB or tunneling needed** - ESP32 runs independently via MQTT
+2. **Grid price is stored in the cloud database** - primary storage location, survives power cycles
+3. **Device name is stored in the cloud database** - saved when user clicks "Start Charging"
+4. **Real-time data is automatically saved** - backend stores all telemetry
+5. **If ESP32 is reset** - history data, grid price, and device name are safe in the cloud database
+6. **No USB or tunneling needed** - ESP32 runs independently via MQTT
 
-**In simple terms:** The ESP32 sends data via MQTT, the backend saves it in the cloud, and the dashboard displays it. Data is safe in the cloud even if the ESP32 is reset.
+**In simple terms:** The ESP32 sends data via MQTT, the backend saves it in the cloud, and the dashboard displays it. User settings (grid price, device name) and history data are all safe in the cloud database even if the ESP32 is reset.
 
 ---
 
 ## Quick Summary
 
 ### 1. BATELEC Grid Price
-- **Where it comes from:** User types it in the dashboard
-- **Where it's saved:** Inside the ESP32 device's permanent memory
-- **Stays saved:** Yes, even after power cycles
+- **Where it comes from:** User types it in the dashboard (no default value)
+- **Where it's saved:** MySQL database (`grid_price` table) on backend server + ESP32 (if MQTT enabled)
+- **How to save:** User must click "Save" button after entering price
+- **Stays saved:** Yes, permanently in cloud database, even after power cycles
 
 ### 2. API/History Location
 - **Where it is:** On the backend server at `/api/history.csv`
@@ -235,7 +243,8 @@ Different types of data are saved in different places. Most important data is sa
 
 ### 4. Data Storage
 - **History data:** Saved permanently in MySQL database on backend server (cloud)
-- **Grid price:** Saved permanently on ESP32 in settings storage
+- **Grid price:** Saved permanently in MySQL database (`grid_price` table) on backend server (cloud)
+- **Device name:** Saved permanently in MySQL database (`device` table) on backend server (cloud)
 - **Live data:** Automatically saved to backend database via MQTT
 - **Dashboard settings:** Managed via environment variables (Vercel)
 

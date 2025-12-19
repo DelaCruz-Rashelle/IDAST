@@ -73,17 +73,22 @@ kWh
 **Calculation Location:** Line 1267
 
 ```javascript
-₱{(totalEnergyKWh * parseFloat(gridPrice || 12)).toFixed(2)}
+{savedGridPrice !== null
+  ? `₱${(totalEnergyKWh * savedGridPrice).toFixed(2)}`
+  : "— (Save grid price to calculate)"}
 ```
 
 **How it works:**
-- Multiplies total energy (kWh) by grid price (cents/kWh)
-- Uses `gridPrice` state variable (defaults to 12.00 if not set)
+- Multiplies total energy (kWh) by saved grid price (cents/kWh)
+- Uses `savedGridPrice` state variable (only set after user clicks "Save" button)
+- Shows "— (Save grid price to calculate)" if no price has been saved
 - Formats as Philippine Peso (₱) with 2 decimal places
 
 **Data Source:** 
 - `totalEnergyKWh` (calculated from history CSV)
-- `gridPrice` state variable (from ESP32 telemetry or user input)
+- `savedGridPrice` state variable (from database, only set after user saves grid price)
+
+**Important:** User must enter grid price and click "Save" button before savings can be calculated. No default value is used.
 
 ---
 

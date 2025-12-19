@@ -139,30 +139,44 @@ solar-tracker/{device_id}/history
 ```json
 {
   "gridPrice": 12.5,
-  "deviceName": "iPhone 15"
+  "deviceName": "iPhone 15",
+  "startCharging": true
 }
 ```
 
 **Field Descriptions:**
-- `gridPrice` (optional): Grid electricity price in PHP per kWh (0-1000). Updates the ESP32's stored grid price value.
-- `deviceName` (optional): Device name string (max 24 characters). Updates the current session device name.
+- `gridPrice` (optional): Grid electricity price in cents/kWh (0-1000). Updates the ESP32's stored grid price value. Also saved to database when user clicks "Save" button.
+- `deviceName` (optional): Device name string (max 24 characters). Updates the current session device name. Also saved to database when user clicks "Start Charging" button.
+- `startCharging` (optional): Boolean flag to start a charging session. When true, triggers device name save to database if device name is provided.
 
 **Usage:**
-- Published by frontend dashboard when user changes grid price or device name
+- Published by frontend dashboard when:
+  - User clicks "Save" button for grid price (saves to database + sends via MQTT)
+  - User clicks "Start Charging" button (saves device name to database + sends via MQTT)
+- **Database Storage:** Both grid price and device name are saved to MySQL database (`grid_price` and `device` tables) before being sent via MQTT
 - ESP32 receiver subscribes to this topic and forwards commands to transmitter via ESP-NOW
 - Transmitter processes commands and updates settings in Preferences (grid price) or session variable (device name)
 
 **Example Control Messages:**
 ```json
-// Update grid price only
+// Update grid price only (saved to database when user clicks "Save")
 {"gridPrice": 12.5}
 
-// Update device name only
+// Update device name only (saved to database when user clicks "Start Charging")
 {"deviceName": "iPhone 15"}
+
+// Start charging session (saves device name to database if provided)
+{"startCharging": true}
+{"deviceName": "iPhone 15", "startCharging": true}
 
 // Update both
 {"gridPrice": 12.5, "deviceName": "iPhone 15"}
 ```
+
+**Important Notes:**
+- Grid price has **no default value** - user must input and click "Save"
+- Device name is saved to database when "Start Charging" is clicked
+- Both values persist in cloud database, not just on ESP32
 
 ## Wildcard Subscriptions
 

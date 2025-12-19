@@ -1,9 +1,8 @@
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/router";
 import Head from "next/head";
-import Link from "next/link";
 import mqtt from "mqtt";
-import { handleMqttError, handleControlError, handleApiError, formatErrorMessage } from "../utils/errorHandler.js";
+import { handleMqttError, handleControlError, handleApiError } from "../utils/errorHandler.js";
 
 const MQTT_BROKER_URL = process.env.NEXT_PUBLIC_MQTT_BROKER_URL || "";
 const MQTT_USERNAME = process.env.NEXT_PUBLIC_MQTT_USERNAME || "";
@@ -21,7 +20,6 @@ export default function Home() {
   const [gridPrice, setGridPrice] = useState("");
   const [savedGridPrice, setSavedGridPrice] = useState(null); // Track saved price for calculations
   const [currentDevice, setCurrentDevice] = useState("Unknown");
-  const [sliderActive, setSliderActive] = useState({ tilt: false, pan: false });
   const [error, setError] = useState("");
   const [historyError, setHistoryError] = useState("");
   const [mqttConnected, setMqttConnected] = useState(false);
@@ -42,7 +40,6 @@ export default function Home() {
   const chartRef = useRef(null);
   const historyChartRef = useRef(null);
   const sensorHistory = useRef({ top: [], left: [], right: [] });
-  const gridPriceDebounceRef = useRef(null);
   const historyPointsRef = useRef([]);
   const [tooltip, setTooltip] = useState(null);
 
@@ -79,23 +76,14 @@ export default function Home() {
       setCurrentDevice(json.deviceName);
       setDeviceName(json.deviceName);
     }
-    // Never update grid price from telemetry once it's been loaded from DB or saved
-    // This prevents telemetry from overwriting user input or saved values
-    // Only allow telemetry update on initial load if no value exists
-    if (json.gridPrice && typeof window !== "undefined" && 
-        document.activeElement?.id !== "gridPrice" && 
-        !gridPriceInputFocusedRef.current &&
-        !gridPriceLoadedFromDbRef.current) {
-      // Only set from telemetry if we haven't loaded from DB and input is empty
-      // This is just for initial state, user input always takes precedence
-      if (gridPrice === "" || gridPrice === null || gridPrice === undefined) {
-        setGridPrice(json.gridPrice.toFixed(2));
-      }
-    }
-    if (!sliderActive.tilt && json.tiltAngle !== undefined) {
+    // Never update grid price from telemetry - user must input and save manually
+    // Telemetry values are ignored to prevent default values from appearing
+    // Grid price should only come from database (user's saved value) or user input
+    // Update tilt and pan values from telemetry (sliders are read-only, so always update)
+    if (json.tiltAngle !== undefined) {
       setTiltValue(json.tiltAngle);
     }
-    if (!sliderActive.pan && json.panTarget !== undefined) {
+    if (json.panTarget !== undefined) {
       setPanValue(json.panTarget);
     }
     
@@ -546,10 +534,17 @@ export default function Home() {
           setGridPrice("");
           gridPriceLoadedFromDbRef.current = false; // Allow user to input
         }
+      } else {
+        // API call failed or returned no price, leave empty for user to input
+        setGridPrice("");
+        gridPriceLoadedFromDbRef.current = false;
       }
     } catch (e) {
       console.error("Failed to load grid price:", e);
       // Don't show error to user for this - it's okay if it fails
+      // Leave empty for user to input
+      setGridPrice("");
+      gridPriceLoadedFromDbRef.current = false;
     }
   };
 
@@ -696,7 +691,6 @@ export default function Home() {
       
       return () => {
         clearInterval(historyInterval);
-        if (gridPriceDebounceRef.current) clearTimeout(gridPriceDebounceRef.current);
         if (deviceNameDebounceRef.current) clearTimeout(deviceNameDebounceRef.current);
       };
     }
@@ -771,24 +765,6 @@ export default function Home() {
     }
   }, [historyData]);
 
-  const mapRange = (v, inMin, inMax, outMin, outMax) => {
-    if (inMax === inMin) return outMin;
-    return ((v - inMin) * (outMax - outMin)) / (inMax - inMin) + outMin;
-  };
-
-  const degToSlider = (v) => {
-    const minPan = data?.minPan || 50;
-    const maxPan = data?.maxPan || 130;
-    return Math.round(mapRange(v, minPan, maxPan, -100, 100));
-  };
-
-  const sliderToPan = (slider) => {
-    const minPan = data?.minPan || 50;
-    const maxPan = data?.maxPan || 130;
-    slider = Math.max(-100, Math.min(100, slider));
-    const ratio = (slider + 100) / 200;
-    return Math.round(minPan + ratio * (maxPan - minPan));
-  };
 
   const totalEnergyKWh = historyData
     ? historyData
