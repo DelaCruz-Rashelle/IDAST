@@ -1144,7 +1144,7 @@ export default function Home() {
                       disabled={!mqttConnected || !deviceId || !gridPrice || isNaN(parseFloat(gridPrice)) || parseFloat(gridPrice) <= 0 || parseFloat(gridPrice) >= 1000}
                       style={{ whiteSpace: "nowrap" }}
                     >
-                      Save
+                      Estimate Savings
                     </button>
                   </div>
                 </div>
