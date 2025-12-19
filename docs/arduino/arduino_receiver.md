@@ -14,10 +14,10 @@
  * Responsibilities:
  *  • Receive telemetry packets from the transmitter via ESP-NOW
  *  • Publish telemetry data to EMQX Cloud via MQTT
- *  • Host minimal web interface for WiFi configuration (AP mode - initial setup only)
+ *  • Host minimal web interface for WiFi configuration (AP mode only)
  *
  * Update TRANSMITTER_MAC with the actual transmitter MAC before deployment.
- * WiFi credentials are configured via AP mode web interface (http://192.168.4.1/wifi-setup).
+ * WiFi credentials are configured via the web interface (AP mode).
  * MQTT credentials are configured via Preferences (set via serial or web interface).
  */
 
@@ -142,6 +142,13 @@ struct ControlPacket {
   }
 
   void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, int len) {
+    // Log ALL received ESP-NOW packets for debugging
+    Serial.printf("📥 ESP-NOW packet received! Length: %d bytes (expected: %d)\n", 
+                  len, sizeof(TelemetryPacket));
+    Serial.printf("   From MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                  info->src_addr[0], info->src_addr[1], info->src_addr[2],
+                  info->src_addr[3], info->src_addr[4], info->src_addr[5]);
+    
     if (len == (int)sizeof(TelemetryPacket)) {
       memcpy(&latestTelemetry, incomingData, sizeof(TelemetryPacket));
       hasTelemetry = true;
@@ -165,6 +172,7 @@ struct ControlPacket {
       // Debug: Log when wrong packet size is received
       Serial.printf("⚠️ ESP-NOW packet size mismatch: expected %d, got %d\n", 
                     sizeof(TelemetryPacket), len);
+      Serial.println("   This might be from a different device or corrupted packet");
     }
     (void)info;
   }
@@ -181,15 +189,16 @@ struct ControlPacket {
     if (!wifiConfigured) {
       Serial.println("\n📶 No WiFi credentials configured.");
       Serial.println("   Device will operate in AP mode only.");
-      Serial.println("   Connect to AP network and visit http://192.168.4.1/wifi-setup to configure WiFi.");
+      Serial.println("   Configure WiFi via: http://192.168.4.1/wifi-setup");
       return;
     }
     
     Serial.println("\n📶 Connecting to WiFi network...");
     Serial.printf("   SSID: %s\n", wifiSSID.c_str());
+    Serial.println("   (AP remains active for reconfiguration)");
     
-    // Switch to STA mode for internet connectivity
-    WiFi.mode(WIFI_STA);
+    // Don't switch modes here - keep AP+STA mode so AP stays visible
+    // The AP was already started in initEspNow() and should remain active
     WiFi.disconnect();
     delay(100);
     
@@ -198,35 +207,20 @@ struct ControlPacket {
     int n = WiFi.scanNetworks();
     Serial.printf("   Found %d networks\n", n);
     bool foundSSID = false;
-    int targetChannel = 1;
     for (int i = 0; i < n; i++) {
       Serial.printf("   [%d] %s (RSSI: %d, Channel: %d)\n", 
                     i, WiFi.SSID(i).c_str(), WiFi.RSSI(i), WiFi.channel(i));
       if (WiFi.SSID(i) == wifiSSID) {
         foundSSID = true;
-        targetChannel = WiFi.channel(i);
-        Serial.printf("   ✅ Found target SSID on channel %d\n", targetChannel);
-        break;  // Found it, no need to continue scanning
+        Serial.printf("   ✅ Found target SSID on channel %d\n", WiFi.channel(i));
       }
     }
     
     if (!foundSSID) {
       Serial.println("   ⚠️ Target SSID not found in scan!");
-      Serial.println("   The stored WiFi network is not available.");
-      Serial.println("   Device will fall back to AP mode.");
-      Serial.println();
-      Serial.println("   📡 To configure WiFi:");
-      Serial.println("   1. Connect to WiFi network: " + String(AP_SSID));
-      Serial.println("   2. Password: " + String(AP_PASSWORD));
-      Serial.println("   3. Open browser and visit: http://192.168.4.1/wifi-setup");
-      Serial.println("   4. Enter your WiFi credentials and click 'Save & Connect'");
-      Serial.println();
-      Serial.printf("   AP IP: %s\n", WiFi.softAPIP().toString().c_str());
-      return;  // Skip connection attempt since network is not available
     }
     
-    // Network found, now try to connect
-    Serial.println("   Attempting connection...");
+    // Now try to connect
     WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
     
     int attempts = 0;
@@ -251,27 +245,29 @@ struct ControlPacket {
       Serial.printf("   Gateway: %s\n", WiFi.gatewayIP().toString().c_str());
       Serial.printf("   Subnet:  %s\n", WiFi.subnetMask().toString().c_str());
       
-      // Disable AP mode after successful STA connection
-      WiFi.mode(WIFI_STA);
-      Serial.println("✅ AP mode disabled - device running in STA mode only");
+      // Keep AP active for easy reconfiguration - don't disable it
+      // If you want to disable AP to save power, uncomment the next two lines:
+      // WiFi.mode(WIFI_STA);
+      // Serial.println("✅ AP mode disabled - device running in STA mode only");
+      Serial.println("✅ WiFi connected - AP remains active for reconfiguration");
       
       // Initialize MQTT after WiFi connection
       initMqtt();
     } else {
       Serial.printf("❌ WiFi Station connection failed! Status code: %d\n", WiFi.status());
-      Serial.println("   Possible reasons:");
-      Serial.println("   - Incorrect password");
-      Serial.println("   - Network security type not supported");
-      Serial.println("   - Network temporarily unavailable");
       Serial.println("   Device will continue in AP mode only");
-      Serial.println();
-      Serial.println("   📡 To configure WiFi:");
-      Serial.println("   1. Connect to WiFi network: " + String(AP_SSID));
-      Serial.println("   2. Password: " + String(AP_PASSWORD));
-      Serial.println("   3. Open browser and visit: http://192.168.4.1/wifi-setup");
-      Serial.println("   4. Enter your WiFi credentials and click 'Save & Connect'");
-      Serial.println();
-      Serial.printf("   AP IP: %s\n", WiFi.softAPIP().toString().c_str());
+      // Re-enable AP mode if STA connection fails
+      WiFi.mode(WIFI_AP);
+      delay(100);
+      WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
+      delay(500); // Give AP time to initialize
+      IPAddress apIP = WiFi.softAPIP();
+      Serial.printf("   AP IP: %s\n", apIP.toString().c_str());
+      if (apIP.toString() != "0.0.0.0") {
+        Serial.println("   Configure WiFi via: http://" + apIP.toString() + "/wifi-setup");
+      } else {
+        Serial.println("   Configure WiFi via: http://192.168.4.1/wifi-setup");
+      }
     }
   }
 
@@ -282,27 +278,71 @@ void reconnectWiFi() {
     mqttClient.disconnect();
     mqttConnected = false;
   }
-  // Switch to STA mode
-  WiFi.mode(WIFI_STA);
+  // Switch to AP+STA mode to keep AP active during reconnection
+  // This allows reconfiguration if the new credentials fail
+  WiFi.mode(WIFI_AP_STA);
+  delay(100);
+  // Restart AP to ensure it's active
+  WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
+  delay(500);
   WiFi.disconnect();
   delay(500);
   initWiFiStation();
 }
 
   void initEspNow() {
-    // Start in AP mode for initial WiFi configuration
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
+    // Check if WiFi credentials exist FIRST to determine WiFi mode
+    settings.begin("solar_rx", true);
+    String storedSSID = settings.getString("wifiSSID", "");
+    settings.end();
+    
+    bool hasCredentials = (storedSSID.length() > 0);
+    
+    if (hasCredentials) {
+      // Use AP+STA mode so AP stays active while connecting to WiFi
+      // This allows reconfiguration even if WiFi connection fails
+      WiFi.mode(WIFI_AP_STA);
+      Serial.println("📡 Starting in AP+STA mode (WiFi credentials found)");
+    } else {
+      // No credentials, use AP mode only
+      WiFi.mode(WIFI_AP);
+      Serial.println("📡 Starting in AP mode only (no WiFi credentials)");
+    }
+    
+    delay(100); // Small delay to ensure mode change completes
+    
+    // Always start AP for WiFi configuration capability
+    bool apStarted = WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
+    if (!apStarted) {
+      Serial.println("❌ Failed to start Access Point!");
+      return;
+    }
+    
+    delay(500); // Give AP time to initialize and get IP address
+    
     Serial.printf("📡 Receiver AP MAC: %s | channel: %u\n",
                   WiFi.softAPmacAddress().c_str(),
                   WIFI_CHANNEL);
-    Serial.println("📡 Access Point started");
+    Serial.println("📡 Access Point started for WiFi configuration");
     Serial.printf("   SSID: %s\n", AP_SSID);
     Serial.printf("   Password: %s\n", AP_PASSWORD);
-    Serial.printf("   IP: %s\n", WiFi.softAPIP().toString().c_str());
-    Serial.println("   Connect to this network and visit http://192.168.4.1/wifi-setup to configure WiFi");
+    
+    IPAddress apIP = WiFi.softAPIP();
+    if (apIP.toString() == "0.0.0.0") {
+      Serial.println("   ⚠️ AP IP not assigned yet, waiting...");
+      delay(1000);
+      apIP = WiFi.softAPIP();
+    }
+    
+    Serial.printf("   IP: %s\n", apIP.toString().c_str());
+    if (apIP.toString() != "0.0.0.0") {
+      Serial.println("   Configure WiFi via: http://" + apIP.toString() + "/wifi-setup");
+    } else {
+      Serial.println("   ⚠️ AP IP still not assigned. Try: http://192.168.4.1/wifi-setup");
+    }
     
     // Then try to connect to WiFi Station (if configured)
+    // AP will remain active in AP_STA mode, allowing reconfiguration
     initWiFiStation();
     
     if (esp_now_init() != ESP_OK) {
@@ -324,6 +364,11 @@ void reconnectWiFi() {
       Serial.println("❌ Failed to add transmitter peer");
     } else {
       Serial.println("✅ ESP-NOW peer configured");
+      Serial.printf("   Waiting for data from transmitter MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                    TRANSMITTER_MAC[0], TRANSMITTER_MAC[1], TRANSMITTER_MAC[2],
+                    TRANSMITTER_MAC[3], TRANSMITTER_MAC[4], TRANSMITTER_MAC[5]);
+      Serial.printf("   Receiver MAC: %s\n", WiFi.macAddress().c_str());
+      Serial.println("   Make sure transmitter is powered on and sending data");
     }
   }
 
@@ -469,7 +514,7 @@ void reconnectWiFi() {
 
   void reconnectMqtt() {
     if (WiFi.status() != WL_CONNECTED) {
-      return;  // Can't connect to MQTT without WiFi Station connection
+      return;  // Can't connect to MQTT without WiFi
     }
     
     if (mqttClient.connected()) {
@@ -484,10 +529,7 @@ void reconnectWiFi() {
     lastMqttReconnectAttempt = now;
     
     Serial.print("🔄 Attempting MQTT connection...");
-    Serial.printf("   WiFi Status: %d (0=IDLE, 3=CONNECTED, 2=AP, 5=AP_STA)\n", WiFi.status());
-    Serial.printf("   WiFi Mode: %d (1=STA, 2=AP, 3=AP_STA)\n", WiFi.getMode());
     String clientId = "ESP32-" + deviceId;
-    Serial.printf("   Client ID: %s\n", clientId.c_str());
     
     // Always use authentication (credentials are set in initMqtt)
     bool connected = mqttClient.connect(
@@ -505,20 +547,12 @@ void reconnectWiFi() {
       String statusMsg = "{\"status\":\"online\",\"timestamp\":" + String(millis()) + "}";
       mqttClient.publish(statusTopic.c_str(), statusMsg.c_str(), true);  // Retained message
       
-      // Subscribe to control topic (device-specific)
+      // Subscribe to control topic
       String controlTopic = "solar-tracker/" + deviceId + "/control";
       if (mqttClient.subscribe(controlTopic.c_str(), 1)) {
         Serial.printf("✅ Subscribed to: %s\n", controlTopic.c_str());
       } else {
         Serial.printf("⚠️ Failed to subscribe to: %s\n", controlTopic.c_str());
-      }
-      
-      // Also subscribe to wildcard topic for control commands
-      String wildcardTopic = "solar-tracker/+/control";
-      if (mqttClient.subscribe(wildcardTopic.c_str(), 1)) {
-        Serial.printf("✅ Subscribed to wildcard: %s\n", wildcardTopic.c_str());
-      } else {
-        Serial.printf("⚠️ Failed to subscribe to wildcard: %s\n", wildcardTopic.c_str());
       }
     } else {
       Serial.printf(" ❌ Failed, rc=%d\n", mqttClient.state());
@@ -532,9 +566,9 @@ void reconnectWiFi() {
     }
     
     if (!hasTelemetry) {
-      // Debug: Log when waiting for telemetry (only once per 10 seconds to avoid spam)
+      // Debug: Log when waiting for telemetry (only once per 60 seconds to avoid spam)
       static unsigned long lastNoTelemetryLog = 0;
-      if (millis() - lastNoTelemetryLog > 10000) {
+      if (millis() - lastNoTelemetryLog > 60000) {
         lastNoTelemetryLog = millis();
         Serial.println("⏳ Waiting for ESP-NOW telemetry data from transmitter...");
       }
@@ -888,8 +922,7 @@ void handle_wifi_setup() {
       return;
     }
     
-    Serial.printf("📥 MQTT control message received on topic: %s\n", topicStr.c_str());
-    Serial.printf("   Message: %s\n", messageStr.c_str());
+    Serial.printf("📥 MQTT control message received: %s\n", messageStr.c_str());
     
     // Parse JSON manually (simple parsing for gridPrice and deviceName)
     // Expected format: {"gridPrice": 12.5, "deviceName": "iPhone 15"}
@@ -967,6 +1000,7 @@ void handle_wifi_setup() {
     // Minimal web server - only for WiFi configuration
     server.on("/wifi-setup", handle_wifi_setup);
     server.on("/wifi-config", HTTP_POST, handle_wifi_config);
+    server.on("/data", sendTelemetryJson);  // Endpoint for WiFi status check
     server.onNotFound([]() {
       server.send(200, "text/html", "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>Solar Tracker</title></head><body><h1>Solar Tracker Receiver</h1><p>WiFi Configuration: <a href=\"/wifi-setup\">/wifi-setup</a></p><p>Device running in MQTT mode. Telemetry published to EMQX Cloud.</p></body></html>");
     });
@@ -982,32 +1016,26 @@ void handle_wifi_setup() {
       Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     } else {
       Serial.println("\n📡 Access Point Mode:");
-      Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      Serial.println("   To configure WiFi:");
-      Serial.println("   1. Connect to WiFi network: " + String(AP_SSID));
-      Serial.println("   2. Password: " + String(AP_PASSWORD));
-      Serial.println("   3. Open browser and visit:");
-      Serial.print("      http://");
+      Serial.print("   http://");
       Serial.println(WiFi.softAPIP());
-      Serial.println("      Or visit: http://192.168.4.1/wifi-setup");
-      Serial.println("   4. Enter your WiFi credentials and click 'Save & Connect'");
-      Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      Serial.println("   Configure WiFi via: http://" + WiFi.softAPIP().toString() + "/wifi-setup");
     }
   }
 
 void loop() {
-  // Handle web server (for WiFi config)
+  // Handle web server (for WiFi config) - always handle, even if WiFi not connected
   server.handleClient();
   
-  // Handle MQTT
-  if (WiFi.status() == WL_CONNECTED) {
-    if (!mqttClient.connected()) {
-      reconnectMqtt();
-    } else {
-      mqttClient.loop();
-      publishTelemetry();
+  // Ensure AP is always active if WiFi is not connected
+  if (WiFi.status() != WL_CONNECTED) {
+    // Check if AP is active, restart if not
+    if (WiFi.getMode() != WIFI_AP && WiFi.getMode() != WIFI_AP_STA) {
+      WiFi.mode(WIFI_AP);
+      WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
+      delay(100);
+      Serial.println("📡 AP restarted (WiFi disconnected)");
     }
-  } else {
+    
     // WiFi disconnected - try to reconnect
     if (wifiConfigured) {
       static unsigned long lastWiFiReconnect = 0;
@@ -1016,6 +1044,23 @@ void loop() {
         Serial.println("🔄 WiFi disconnected, attempting reconnect...");
         initWiFiStation();
       }
+    }
+  } else {
+    // WiFi connected - ensure AP is still active in AP_STA mode
+    if (WiFi.getMode() == WIFI_STA) {
+      // Switch back to AP_STA to keep AP active
+      WiFi.mode(WIFI_AP_STA);
+      WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
+      delay(100);
+      Serial.println("📡 AP reactivated (was in STA-only mode)");
+    }
+    
+    // Handle MQTT
+    if (!mqttClient.connected()) {
+      reconnectMqtt();
+    } else {
+      mqttClient.loop();
+      publishTelemetry();
     }
   }
 }

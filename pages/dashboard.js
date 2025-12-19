@@ -35,9 +35,6 @@ export default function Home() {
   const [wifiSSID, setWifiSSID] = useState("");
   const [wifiConnected, setWifiConnected] = useState(false);
   
-  // Loading state
-  const [showDashboard, setShowDashboard] = useState(false); // Start hidden, show after data arrives
-  
   const chartRef = useRef(null);
   const historyChartRef = useRef(null);
   const sensorHistory = useRef({ top: [], left: [], right: [] });
@@ -773,116 +770,7 @@ export default function Home() {
         }, 0)
     : 0;
 
-  // Loading screen component
-  const LoadingScreen = ({ message, progress, isWaiting }) => {
-    return (
-      <div className="loading-screen">
-        <div className="loading-screen-content">
-          {/* Animated spinner */}
-          <div className="loading-spinner" />
-          
-          <h2 className="loading-title">
-            {message || 'Connecting...'}
-          </h2>
-          
-          {progress && (
-            <div className="loading-progress">
-              {progress}
-            </div>
-          )}
-          
-          {isWaiting && (
-            <div className="loading-waiting">
-              This may take 10-30 seconds...
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
 
-  // Setup wizard removed - no longer needed for MQTT mode
-  if (false) {
-    return (
-      <>
-        <Head>
-          <title>Device Setup — Solar Tracker</title>
-          <meta name="viewport" content="width=device-width,initial-scale=1" />
-        </Head>
-        <div className="setup-page-wrap">
-          <div className="setup-overlay">
-            <div className="setup-card">
-              <div className="setup-header">
-                <div className="sun"></div>
-                <h2 className="setup-title">Tunnel Information</h2>
-                <p className="setup-subtitle">
-                  Cloudflare Tunnel Setup
-                </p>
-              </div>
-              
-              <div className="setup-content">
-                {/* Tunnel Information */}
-                {setupStep === 3 && (
-                  <>
-                    <div style={{ textAlign: "center", marginBottom: "24px" }}>
-                      <div style={{ fontSize: "48px", marginBottom: "16px" }}>📡</div>
-                      <h3 style={{ color: "#2fd27a", margin: "0 0 8px 0" }}>Tunnel Setup</h3>
-                      <p style={{ color: "var(--muted)", fontSize: "14px" }}>
-                        Configure Cloudflare tunnel for remote access
-                      </p>
-                    </div>
-                    {staIP && staIP !== "Not connected" ? (
-                      <div style={{ padding: "16px", background: "rgba(47, 210, 122, 0.1)", border: "1px solid rgba(47, 210, 122, 0.3)", borderRadius: "8px", marginBottom: "20px" }}>
-                        <div style={{ fontSize: "12px", marginBottom: "8px", color: "var(--ink)", fontWeight: "600" }}>
-                          📡 ESP32 WiFi IP Address:
-                        </div>
-                        <div className="mono" style={{ fontSize: "18px", fontWeight: "700", color: "#2fd27a", marginBottom: "12px" }}>
-                          {staIP}
-                        </div>
-                        <div style={{ fontSize: "11px", color: "var(--muted)", lineHeight: "1.6" }}>
-                          <strong>To set up Cloudflare tunnel, run:</strong>
-                          <br />
-                          <code style={{ 
-                            background: "rgba(0,0,0,0.3)", 
-                            padding: "8px 12px", 
-                            borderRadius: "4px",
-                            fontSize: "11px",
-                            display: "block",
-                            marginTop: "8px",
-                            wordBreak: "break-all"
-                          }}>
-                            cloudflared tunnel --url http://{staIP}:80
-                          </code>
-                        </div>
-                      </div>
-                    ) : (
-                      <div style={{ padding: "16px", background: "rgba(245, 179, 66, 0.1)", border: "1px solid rgba(245, 179, 66, 0.3)", borderRadius: "8px", marginBottom: "20px" }}>
-                        <div style={{ fontSize: "12px", color: "var(--muted)" }}>
-                          ⏳ Waiting for ESP32 to connect to WiFi... This may take 10-30 seconds.
-                          <br />
-                          <br />
-                          Once connected, the IP address will appear here.
-                        </div>
-                      </div>
-                    )}
-                    <button
-                      className="setup-button"
-                      onClick={() => {
-                        setSetupComplete(true);
-                        setShowSetupWizard(false);
-                      }}
-                    >
-                      Go to Dashboard
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      </>
-    );
-  }
 
   return (
     <>
@@ -891,29 +779,7 @@ export default function Home() {
         <meta name="viewport" content="width=device-width,initial-scale=1" />
       </Head>
       
-      {/* Loading Screen - Show when connecting or waiting for data */}
-      {!showDashboard && (
-        <LoadingScreen
-          message={
-            !mqttConnected
-              ? "Connecting to MQTT broker..."
-              : !data
-              ? "Waiting for device data..."
-              : "Loading dashboard..."
-          }
-          progress={
-            !mqttConnected
-              ? "Establishing MQTT connection..."
-              : !data
-              ? "Waiting for telemetry data from ESP32..."
-              : null
-          }
-          isWaiting={true}
-        />
-      )}
-      
-      {/* Main Dashboard - Show when data is available */}
-      {showDashboard && (
+      {/* Main Dashboard */}
       <div className="wrap">
         <div className="header">
           <div className="header-left">
@@ -1387,8 +1253,7 @@ export default function Home() {
           </div>
         </div>
         <footer>Charge phones with sunshine — savings and impact shown are based on actual tracker readings and energy estimates.</footer>
-        </div>
-      )}
+      </div>
     </>
   );
 }
