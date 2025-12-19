@@ -151,6 +151,10 @@ body {
   margin-bottom: 0;
 }
 
+.right-column-container > .card.card-auto-fit .content > *:last-child {
+  margin-bottom: 0;
+}
+
 .card h3 {
   margin: 0;
   padding: 14px 16px;
