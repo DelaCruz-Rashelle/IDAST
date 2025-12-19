@@ -14,10 +14,10 @@
  * Responsibilities:
  *  • Receive telemetry packets from the transmitter via ESP-NOW
  *  • Publish telemetry data to EMQX Cloud via MQTT
- *  • Host minimal web interface for WiFi configuration (AP mode only)
+ *  • Host minimal web interface for WiFi configuration (AP mode - initial setup only)
  *
  * Update TRANSMITTER_MAC with the actual transmitter MAC before deployment.
- * WiFi credentials are configured via the web interface (AP mode).
+ * WiFi credentials are configured via the deployed app (MQTT) or AP mode for initial setup.
  * MQTT credentials are configured via Preferences (set via serial or web interface).
  */
 
@@ -181,7 +181,7 @@ struct ControlPacket {
     if (!wifiConfigured) {
       Serial.println("\n📶 No WiFi credentials configured.");
       Serial.println("   Device will operate in AP mode only.");
-      Serial.println("   Configure WiFi via: http://192.168.4.1/wifi-setup");
+      Serial.println("   Configure WiFi via deployed app (MQTT) or connect to AP for initial setup.");
       return;
     }
     
@@ -213,14 +213,15 @@ struct ControlPacket {
     if (!foundSSID) {
       Serial.println("   ⚠️ Target SSID not found in scan!");
       Serial.println("   The stored WiFi network is not available.");
-      Serial.println("   Device will fall back to AP mode for reconfiguration.");
-      Serial.println("   Connect to AP and update WiFi settings via: http://192.168.4.1/wifi-setup");
+      Serial.println("   Device will fall back to AP mode.");
+      Serial.println("   Configure new WiFi via deployed app (MQTT) when ESP32 reconnects.");
       
       // Re-enable AP mode immediately since network is not available
+      // Note: AP mode is kept for potential reconnection, but configuration should be done via deployed app
       WiFi.mode(WIFI_AP);
       WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
       Serial.printf("   AP IP: %s\n", WiFi.softAPIP().toString().c_str());
-      Serial.println("   Configure WiFi via: http://" + WiFi.softAPIP().toString() + "/wifi-setup");
+      Serial.println("   Waiting for WiFi configuration via deployed app (MQTT)...");
       return;  // Skip connection attempt since network is not available
     }
     
@@ -263,11 +264,12 @@ struct ControlPacket {
       Serial.println("   - Network security type not supported");
       Serial.println("   - Network temporarily unavailable");
       Serial.println("   Device will continue in AP mode only");
+      Serial.println("   Update WiFi credentials via deployed app (MQTT) when ESP32 reconnects.");
       // Re-enable AP mode if STA connection fails
       WiFi.mode(WIFI_AP);
       WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
       Serial.printf("   AP IP: %s\n", WiFi.softAPIP().toString().c_str());
-      Serial.println("   Configure WiFi via: http://" + WiFi.softAPIP().toString() + "/wifi-setup");
+      Serial.println("   Waiting for WiFi configuration via deployed app (MQTT)...");
     }
   }
 
@@ -286,16 +288,16 @@ void reconnectWiFi() {
 }
 
   void initEspNow() {
-    // Start in AP mode for initial WiFi configuration
+    // Start in AP mode (for initial setup only - WiFi config should be done via deployed app)
     WiFi.mode(WIFI_AP);
     WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
     Serial.printf("📡 Receiver AP MAC: %s | channel: %u\n",
                   WiFi.softAPmacAddress().c_str(),
                   WIFI_CHANNEL);
-    Serial.println("📡 Access Point started for WiFi configuration");
+    Serial.println("📡 Access Point started (for initial setup if needed)");
     Serial.printf("   SSID: %s\n", AP_SSID);
     Serial.printf("   IP: %s\n", WiFi.softAPIP().toString().c_str());
-    Serial.println("   Configure WiFi via: http://" + WiFi.softAPIP().toString() + "/wifi-setup");
+    Serial.println("   WiFi configuration should be done via deployed app (MQTT)");
     
     // Then try to connect to WiFi Station (if configured)
     initWiFiStation();
@@ -1018,11 +1020,13 @@ void handle_wifi_setup() {
       Serial.print("   IP: ");
       Serial.println(WiFi.localIP());
       Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      Serial.println("   Configure WiFi via deployed app (MQTT)");
     } else {
       Serial.println("\n📡 Access Point Mode:");
       Serial.print("   http://");
       Serial.println(WiFi.softAPIP());
-      Serial.println("   Configure WiFi via: http://" + WiFi.softAPIP().toString() + "/wifi-setup");
+      Serial.println("   WiFi configuration should be done via deployed app (MQTT)");
+      Serial.println("   AP mode is available for initial setup if needed");
     }
   }
 

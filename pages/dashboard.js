@@ -1358,8 +1358,8 @@ export default function Home() {
                   lineHeight: '1.5'
                 }}>
                   <strong>Note:</strong> If ESP32 is not connected to WiFi, it cannot receive MQTT messages. 
-                  In that case, connect to the ESP32's AP network (<code style={{ background: 'rgba(0,0,0,0.3)', padding: '2px 4px', borderRadius: '3px' }}>Solar_Capstone_Admin</code>) 
-                  and configure WiFi via <code style={{ background: 'rgba(0,0,0,0.3)', padding: '2px 4px', borderRadius: '3px' }}>http://192.168.4.1/wifi-setup</code>
+                  For initial setup, connect to the ESP32's AP network (<code style={{ background: 'rgba(0,0,0,0.3)', padding: '2px 4px', borderRadius: '3px' }}>Solar_Capstone_Admin</code>) 
+                  once. After that, all WiFi configuration should be done via this deployed app.
                 </div>
               )}
             </div>
