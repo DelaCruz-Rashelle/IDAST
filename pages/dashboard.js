@@ -270,13 +270,21 @@ export default function Home() {
               <button
                 className="manual-btn"
                 onClick={saveDeviceState}
-                disabled={saveStateStatus.loading || !mqtt.data}
-                style={{
-                  fontSize: "14px",
-                  opacity: saveStateStatus.loading || !mqtt.data ? 0.6 : 1,
-                  cursor: saveStateStatus.loading || !mqtt.data ? "not-allowed" : "pointer"
-                }}
-                title={!mqtt.data ? "No telemetry data available" : "Save current device state to database"}
+                disabled={
+                  saveStateStatus.loading || 
+                  !mqtt.data || 
+                  registeredDevices.length === 0 || 
+                  !mqtt.chargingStarted
+                }
+                title={
+                  !mqtt.data 
+                    ? "No telemetry data available" 
+                    : registeredDevices.length === 0 
+                    ? "No registered device. Please register a device first."
+                    : !mqtt.chargingStarted
+                    ? "Please start charging first"
+                    : "Save current device state to database"
+                }
               >
                 {saveStateStatus.loading ? "Saving..." : saveStateStatus.success ? "✓ Saved" : "Save Device State"}
               </button>
@@ -745,23 +753,29 @@ export default function Home() {
               </div>
             )}
             
-            <div className="history-logs-tabs">
-              <button
-                className={`history-logs-tab ${historyData.historyLogsTab === "device_state" ? "active" : ""}`}
-                onClick={() => historyData.setHistoryLogsTab("device_state")}
-              >
-                Device State ({historyData.historyLogsData.device_states.length})
-              </button>
-              <button
-                className={`history-logs-tab ${historyData.historyLogsTab === "grid_price" ? "active" : ""}`}
-                onClick={() => historyData.setHistoryLogsTab("grid_price")}
-              >
-                Grid Price ({historyData.historyLogsData.grid_prices.length})
-              </button>
-            </div>
-            
             <div className="history-logs-content">
-              {historyData.historyLogsTab === "device_state" ? (
+              {/* Part 1: Device State Section */}
+              <div className="history-logs-section">
+                <div className="history-logs-section-header">
+                  <h4>Device State</h4>
+                  <span className="history-logs-section-count">
+                    {historyData.historyLogsData.device_states.length} saved states
+                  </span>
+                </div>
+                <div className="history-logs-connected-device">
+                  <div className="history-logs-connected-device-label">Connected Device:</div>
+                  <div className="history-logs-connected-device-value">
+                    {currentDevice && currentDevice !== "Unknown" ? currentDevice : "—"}
+                  </div>
+                  {registeredDevices.length > 0 && (
+                    <div className="history-logs-registered-devices">
+                      <div className="history-logs-registered-devices-label">Registered Devices:</div>
+                      <div className="history-logs-registered-devices-list">
+                        {registeredDevices.join(", ") || "—"}
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <div className="history-logs-table-container">
                   <table className="history-logs-table">
                     <thead>
@@ -818,7 +832,30 @@ export default function Home() {
                     </tbody>
                   </table>
                 </div>
-              ) : (
+              </div>
+
+              {/* Part 2: Grid Price Estimated Savings Section */}
+              <div className="history-logs-section">
+                <div className="history-logs-section-header">
+                  <h4>Grid Price & Estimated Savings</h4>
+                  <span className="history-logs-section-count">
+                    {historyData.historyLogsData.grid_prices.length} price entries
+                  </span>
+                </div>
+                {gridPrice.savedGridPrice !== null && (
+                  <div className="history-logs-current-savings">
+                    <div className="history-logs-current-savings-label">Current Grid Price:</div>
+                    <div className="history-logs-current-savings-value">
+                      {gridPrice.savedGridPrice.toFixed(2)} cents/kWh
+                    </div>
+                    <div className="history-logs-current-savings-label" style={{ marginTop: "8px" }}>
+                      Total Estimated Savings:
+                    </div>
+                    <div className="history-logs-current-savings-value">
+                      ₱{(totalEnergyKWh * gridPrice.savedGridPrice).toFixed(2)}
+                    </div>
+                  </div>
+                )}
                 <div className="history-logs-table-container">
                   <table className="history-logs-table">
                     <thead>
@@ -875,7 +912,7 @@ export default function Home() {
                     </tbody>
                   </table>
                 </div>
-              )}
+              </div>
             </div>
           </div>
         </div>
