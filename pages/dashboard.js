@@ -25,6 +25,7 @@ export default function Home() {
   const [mqttConnected, setMqttConnected] = useState(false);
   const [deviceId, setDeviceId] = useState("");
   const [chargingStarted, setChargingStarted] = useState(false);
+  const [registeredDevices, setRegisteredDevices] = useState([]);
   const deviceNameInputFocusedRef = useRef(false);
   const deviceNameDebounceRef = useRef(null);
   const deviceNameLoadedFromDbRef = useRef(false);
@@ -489,6 +490,27 @@ export default function Home() {
     }
   };
 
+  // Load all registered devices from database
+  const loadRegisteredDevices = async () => {
+    if (!RAILWAY_API_BASE_URL) return;
+    
+    try {
+      const base = RAILWAY_API_BASE_URL.endsWith("/")
+        ? RAILWAY_API_BASE_URL.slice(0, -1)
+        : RAILWAY_API_BASE_URL;
+      const res = await fetch(`${base}/api/devices`);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.devices && Array.isArray(json.devices)) {
+          setRegisteredDevices(json.devices);
+        }
+      }
+    } catch (e) {
+      console.error("Failed to load registered devices:", e);
+      // Don't show error to user for this - it's okay if it fails
+    }
+  };
+
   // Save device name to database
   const saveDeviceName = async (name) => {
     if (!RAILWAY_API_BASE_URL) return;
@@ -507,6 +529,8 @@ export default function Home() {
       }
       // Mark that we've saved to DB, so telemetry won't overwrite it
       deviceNameLoadedFromDbRef.current = true;
+      // Refresh registered devices list after saving
+      await loadRegisteredDevices();
     } catch (e) {
       console.error("Failed to save device name:", e);
       // Don't show error to user - MQTT command is more important
@@ -589,7 +613,7 @@ export default function Home() {
     }
   };
 
-  // Draw history chart
+  // Draw history chart (filtered to registered devices only)
   const drawHistoryChart = (csvData) => {
     if (!historyChartRef.current || !csvData) return;
     const canvas = historyChartRef.current;
@@ -603,7 +627,8 @@ export default function Home() {
     const lines = csvData.trim().split("\n").slice(1).filter(l => l);
     if (lines.length === 0) return;
     
-    const points = lines.map((l, idx) => {
+    // Parse all points first
+    const allPoints = lines.map((l, idx) => {
       const p = l.split(",");
       const timestamp = parseInt(p[0]) || 0;
       // Handle both Unix timestamps (seconds) and millis timestamps
@@ -626,10 +651,29 @@ export default function Home() {
         timestamp: timestamp,
         energyWh: parseFloat(p[1]) || 0,
         battery: parseFloat(p[2]) || 0,
-        device: p[3] || "Unknown",
+        device: (p[3] || "Unknown").trim(),
         date: date
       };
     });
+    
+    // Filter to only registered devices (or show all if no devices registered yet)
+    const points = registeredDevices.length > 0
+      ? allPoints.filter(p => registeredDevices.includes(p.device))
+      : allPoints;
+    
+    if (points.length === 0) {
+      // No data for registered devices, show message
+      ctx.fillStyle = "#9fb3d1";
+      ctx.font = "12px monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("No energy data for registered devices", canvas.width / 2, canvas.height / 2);
+      ctx.textAlign = "left";
+      ctx.fillText("Energy Harvested (kWh)", 20, 20);
+      ctx.textAlign = "right";
+      ctx.fillText("Time →", canvas.width - 20, canvas.height - 10);
+      historyPointsRef.current = [];
+      return;
+    }
     
     points.forEach(p => { p.energyKWh = p.energyWh / 1000.0; });
     const maxEnergyKWh = Math.max(...points.map(p => p.energyKWh), 0.001);
@@ -715,10 +759,13 @@ export default function Home() {
       loadHistory();
       loadDeviceName();
       loadGridPrice();
+      loadRegisteredDevices();
       const historyInterval = setInterval(loadHistory, 30000);
+      const devicesInterval = setInterval(loadRegisteredDevices, 60000); // Refresh every minute
       
       return () => {
         clearInterval(historyInterval);
+        clearInterval(devicesInterval);
         if (deviceNameDebounceRef.current) clearTimeout(deviceNameDebounceRef.current);
       };
     }
@@ -791,19 +838,97 @@ export default function Home() {
         canvas.removeEventListener("mouseleave", handleMouseLeave);
       };
     }
-  }, [historyData]);
+  }, [historyData, registeredDevices]);
 
 
+  // Calculate total energy for registered devices only
   const totalEnergyKWh = historyData
-    ? historyData
-        .trim()
-        .split("\n")
-        .slice(1)
-        .reduce((acc, line) => {
+    ? (() => {
+        const lines = historyData.trim().split("\n").slice(1);
+        if (registeredDevices.length === 0) {
+          // If no registered devices, show all data
+          return lines.reduce((acc, line) => {
+            const parts = line.split(",");
+            return acc + (parseFloat(parts[1]) || 0) / 1000.0;
+          }, 0);
+        }
+        // Filter to registered devices only
+        return lines.reduce((acc, line) => {
           const parts = line.split(",");
-          return acc + (parseFloat(parts[1]) || 0) / 1000.0;
-        }, 0)
+          const device = (parts[3] || "Unknown").trim();
+          if (registeredDevices.includes(device)) {
+            return acc + (parseFloat(parts[1]) || 0) / 1000.0;
+          }
+          return acc;
+        }, 0);
+      })()
     : 0;
+
+  // Calculate device statistics from history data, filtered to registered devices only
+  const deviceStats = historyData
+    ? (() => {
+        const lines = historyData.trim().split("\n").slice(1);
+        const stats = {};
+        
+        lines.forEach((line) => {
+          const parts = line.split(",");
+          if (parts.length >= 4) {
+            const device = (parts[3] || "Unknown").trim();
+            const energyWh = parseFloat(parts[1]) || 0;
+            const energyKWh = energyWh / 1000.0;
+            const battery = parseFloat(parts[2]) || 0;
+            const timestamp = parseInt(parts[0]) || 0;
+            
+            // Skip "Unknown" devices and only include registered devices
+            if (device === "Unknown" || device === "" || !registeredDevices.includes(device)) return;
+            
+            if (!stats[device]) {
+              stats[device] = {
+                name: device,
+                totalEnergyKWh: 0,
+                totalEnergyWh: 0,
+                sessionCount: 0,
+                avgBattery: 0,
+                batterySum: 0,
+                batteryCount: 0,
+                firstSeen: timestamp,
+                lastSeen: timestamp
+              };
+            }
+            
+            stats[device].totalEnergyWh += energyWh;
+            stats[device].totalEnergyKWh += energyKWh;
+            stats[device].sessionCount += 1;
+            
+            if (!isNaN(battery) && battery > 0) {
+              stats[device].batterySum += battery;
+              stats[device].batteryCount += 1;
+            }
+            
+            if (timestamp > 0) {
+              if (stats[device].firstSeen === 0 || timestamp < stats[device].firstSeen) {
+                stats[device].firstSeen = timestamp;
+              }
+              if (timestamp > stats[device].lastSeen) {
+                stats[device].lastSeen = timestamp;
+              }
+            }
+          }
+        });
+        
+        // Calculate averages
+        Object.values(stats).forEach((stat) => {
+          if (stat.batteryCount > 0) {
+            stat.avgBattery = stat.batterySum / stat.batteryCount;
+          }
+        });
+        
+        // Convert to array and sort by total energy (descending)
+        return Object.values(stats)
+          .sort((a, b) => b.totalEnergyKWh - a.totalEnergyKWh)
+          .slice(0, 10); // Top 10 devices
+      })()
+    : [];
 
 
 
@@ -1234,9 +1359,34 @@ export default function Home() {
               <div className="history-meta">
                 <h4>Device highlights (rolling 60 days)</h4>
                 <ul id="historyHighlights">
-                  <li className="muted" style={{ fontStyle: "italic" }}>
-                    No device highlights available yet. Register a device to start tracking energy delivery.
-                  </li>
+                  {deviceStats.length > 0 ? (
+                    deviceStats.map((stat, idx) => {
+                      const firstDate = stat.firstSeen > 0 
+                        ? new Date(stat.firstSeen > 1e12 ? stat.firstSeen : stat.firstSeen * 1000).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                        : "—";
+                      const lastDate = stat.lastSeen > 0
+                        ? new Date(stat.lastSeen > 1e12 ? stat.lastSeen : stat.lastSeen * 1000).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                        : "—";
+                      return (
+                        <li key={idx} style={{ marginBottom: "8px" }}>
+                          <strong>{stat.name}</strong> — {stat.totalEnergyKWh.toFixed(3)} kWh total
+                          {stat.sessionCount > 0 && (
+                            <span className="muted" style={{ fontSize: "12px", display: "block", marginTop: "2px" }}>
+                              {stat.sessionCount} session{stat.sessionCount !== 1 ? "s" : ""} · 
+                              {stat.avgBattery > 0 && ` Avg battery: ${stat.avgBattery.toFixed(1)}% ·`}
+                              {" "}First seen: {firstDate} · Last seen: {lastDate}
+                            </span>
+                          )}
+                        </li>
+                      );
+                    })
+                  ) : (
+                    <li className="muted" style={{ fontStyle: "italic" }}>
+                      {registeredDevices.length > 0 
+                        ? "No energy data for registered devices in the last 60 days. Start charging to track energy delivery."
+                        : "No device highlights available yet. Register a device to start tracking energy delivery."}
+                    </li>
+                  )}
                 </ul>
                 <table className="table" id="historySummary" style={{ marginTop: "8px" }}>
                   <thead>

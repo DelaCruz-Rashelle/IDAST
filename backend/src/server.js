@@ -226,6 +226,20 @@ app.get("/api/device", asyncHandler(async (req, res) => {
   }
 }, "API"));
 
+// Get all registered devices
+app.get("/api/devices", asyncHandler(async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      "SELECT DISTINCT device_name FROM device ORDER BY device_name ASC"
+    );
+    const devices = rows.map(row => row.device_name);
+    return res.json({ ok: true, devices });
+  } catch (error) {
+    handleDatabaseError(error, "devices query");
+    throw error;
+  }
+}, "API"));
+
 // Grid price endpoints: save and retrieve grid price
 app.post("/api/grid-price", asyncHandler(async (req, res) => {
   const { price } = req.body;
