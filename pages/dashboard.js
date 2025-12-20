@@ -597,7 +597,12 @@ export default function Home() {
           <div className="card grid-full">
             <h3>Monthly Report — Energy History</h3>
             <div className="content">
-              {historyData.historyError && (
+              {historyData.historyLoading && (
+                <div style={{ marginBottom: "16px", color: "var(--muted)", fontSize: "13px" }}>
+                  Loading history data...
+                </div>
+              )}
+              {!historyData.historyLoading && historyData.historyError && (
                 <div className="history-error">
                   <strong>History Error:</strong> {historyData.historyError}
                 </div>
@@ -747,12 +752,18 @@ export default function Home() {
               </button>
             </div>
             
+            {historyData.historyLogsLoading && (
+              <div style={{ margin: "16px", textAlign: "center", color: "var(--muted)", fontSize: "14px" }}>
+                Loading history logs...
+              </div>
+            )}
             {historyData.historyLogsError && (
               <div className="error-message" style={{ margin: "16px" }}>
                 {historyData.historyLogsError}
               </div>
             )}
             
+            {!historyData.historyLogsLoading && (
             <div className="history-logs-content">
               {/* Part 1: Device State Section */}
               <div className="history-logs-section">
@@ -914,6 +925,7 @@ export default function Home() {
                 </div>
               </div>
             </div>
+            )}
           </div>
         </div>
       )}

@@ -17,6 +17,7 @@ export function useHistoryData(onHistoryLoaded) {
   }, [onHistoryLoaded]);
   const [historyData, setHistoryData] = useState("");
   const [historyError, setHistoryError] = useState("");
+  const [historyLoading, setHistoryLoading] = useState(false); // Loading state for history fetch
   const [deviceStatsData, setDeviceStatsData] = useState(null); // Device statistics from API
   const [historyLogsOpen, setHistoryLogsOpen] = useState(false);
   const [historyLogsData, setHistoryLogsData] = useState({ device_states: [], grid_prices: [] });
@@ -27,6 +28,7 @@ export function useHistoryData(onHistoryLoaded) {
   // Load history CSV for graph display
   const loadHistory = async () => {
     setHistoryError(""); // Clear previous errors
+    setHistoryLoading(true); // Set loading state to prevent flickering
     let fetchUrl = ""; // Declare outside try for error logging
     try {
       // Prefer Railway DB-backed history if configured (keeps realtime via ESP32 tunnel unchanged)
@@ -39,6 +41,7 @@ export function useHistoryData(onHistoryLoaded) {
         if (res.ok) {
           const text = await res.text();
           setHistoryData(text);
+          setHistoryError(""); // Clear any previous errors on success
           // Call callback for chart drawing if provided
           if (onHistoryLoadedRef.current) {
             onHistoryLoadedRef.current(text);
@@ -74,12 +77,16 @@ export function useHistoryData(onHistoryLoaded) {
       handleApiError(new Error(errorMsg), setHistoryError, "fetch history");
       console.error("History fetch error:", e);
       console.error("Failed URL:", fetchUrl);
+    } finally {
+      setHistoryLoading(false); // Clear loading state
     }
   };
 
   const loadHistoryLogs = async () => {
     setHistoryLogsError("");
     setHistoryLogsLoading(true);
+    // Open modal immediately so user can see loading state or errors
+    setHistoryLogsOpen(true);
     try {
       if (!RAILWAY_API_BASE_URL) {
         throw new Error("Backend API not configured");
@@ -113,7 +120,6 @@ export function useHistoryData(onHistoryLoaded) {
           device_states: data.device_states || [],
           grid_prices: data.grid_prices || []
         });
-        setHistoryLogsOpen(true);
       } else {
         throw new Error(data.error || "Failed to load history logs");
       }
@@ -166,6 +172,7 @@ export function useHistoryData(onHistoryLoaded) {
     historyData,
     setHistoryData,
     historyError,
+    historyLoading,
     deviceStatsData,
     historyLogsOpen,
     setHistoryLogsOpen,
