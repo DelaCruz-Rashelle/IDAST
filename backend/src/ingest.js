@@ -52,64 +52,39 @@ async function handleMqttMessage(topic, message) {
       return;
     }
     
-    // Insert telemetry into database
-    await insertTelemetryRow(telemetry);
-    console.log(`✅ Telemetry stored from device: ${telemetry.device_id || "unknown"}`);
+    // Update device table with telemetry data
+    await updateDeviceFromTelemetry(telemetry);
+    console.log(`✅ Device data updated from telemetry: ${telemetry.device_id || "unknown"}`);
   } catch (err) {
     handleMqttError(err, topic, message);
   }
 }
 
-export async function insertTelemetryRow(t) {
-  const rawJson = JSON.stringify(t);
-  const sql = `
-    INSERT INTO telemetry (
-      device_name,
-      top, \`left\`, \`right\`, \`avg\`, horizontal_error, vertical_error,
-      tilt_angle, pan_angle, pan_target, \`manual\`, steady,
-      power_w, power_actual_w, temp_c,
-      battery_pct, battery_v, efficiency,
-      energy_wh, energy_kwh,
-      co2_kg, trees, phones, phone_minutes, pesos, grid_price,
-      raw_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON))
-  `;
-
-  const params = [
-    t.deviceName ?? null,
-    toInt(t.top),
-    toInt(t.left),
-    toInt(t.right),
-    toInt(t.avg),
-    toInt(t.horizontalError),
-    toInt(t.verticalError),
-    toInt(t.tiltAngle),
-    toInt(t.panAngle),
-    toInt(t.panTarget),
-    toBool01(t.manual),
-    toBool01(t.steady),
-    toNum(t.powerW),
-    toNum(t.powerActualW),
-    toNum(t.tempC),
-    toNum(t.batteryPct),
-    toNum(t.batteryV),
-    toNum(t.efficiency),
-    toNum(t.energyWh),
-    toNum(t.energyKWh),
-    toNum(t.co2kg),
-    toNum(t.trees),
-    toNum(t.phones),
-    toNum(t.phoneMinutes),
-    toNum(t.pesos),
-    toNum(t.gridPrice),
-    rawJson,
-  ];
-
-  try {
-    await pool.execute(sql, params);
-  } catch (error) {
-    handleDatabaseError(error, "insert telemetry");
-    throw error; // Re-throw to allow caller to handle
+export async function updateDeviceFromTelemetry(t) {
+  // Update device table with latest telemetry data
+  // Note: Telemetry table has been removed - all data is stored in device table
+  if (t.deviceName && (t.deviceName.trim() !== "" && t.deviceName.trim().toLowerCase() !== "unknown")) {
+    const deviceName = t.deviceName.trim();
+    const energyWh = toNum(t.energyWh);
+    const batteryPct = toNum(t.batteryPct);
+    const timestamp = new Date(); // Use current timestamp for device table
+    
+    try {
+      // Update or insert device record
+      await pool.execute(
+        `INSERT INTO device (device_name, energy_wh, battery_pct, ts) 
+         VALUES (?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE 
+           energy_wh = VALUES(energy_wh),
+           battery_pct = VALUES(battery_pct),
+           ts = VALUES(ts),
+           updated_at = CURRENT_TIMESTAMP(3)`,
+        [deviceName, energyWh, batteryPct, timestamp]
+      );
+    } catch (error) {
+      handleDatabaseError(error, "update device from telemetry");
+      throw error; // Re-throw to allow caller to handle
+    }
   }
 }
 

@@ -1,5 +1,5 @@
 import express from "express";
-import { dbPing, initSchema, seedSampleTelemetry } from "./db.js";
+import { dbPing, initSchema, seedSampleDevices } from "./db.js";
 import { startIngestLoop } from "./ingest.js";
 import { pool } from "./db.js";
 import { asyncHandler, createErrorResponse, handleDatabaseError } from "./errorHandler.js";
@@ -43,13 +43,13 @@ app.get("/health", asyncHandler(async (req, res) => {
 
 // Very small status endpoint to confirm env wiring in Railway.
 app.get("/", (req, res) => {
-  res.type("text/plain").send("IDAST telemetry backend running");
+  res.type("text/plain").send("IDAST device data backend running");
 });
 
 app.get("/api/latest", asyncHandler(async (req, res) => {
   try {
     const [rows] = await pool.query(
-      "SELECT * FROM telemetry ORDER BY ts DESC, id DESC LIMIT 1"
+      "SELECT * FROM device ORDER BY ts DESC, updated_at DESC, id DESC LIMIT 1"
     );
     const row = rows?.[0] || null;
     return res.json({ ok: true, data: row });
@@ -68,14 +68,12 @@ app.get("/api/history.csv", asyncHandler(async (req, res) => {
   if (!Number.isFinite(days) || days <= 0) days = 60;
   days = Math.min(days, 365);
 
-  console.log(`[history.csv] Querying history for ${days} days`);
+  console.log(`[history.csv] Querying device history for ${days} days`);
   
-  // First, verify database connection and set GROUP_CONCAT max length to avoid truncation
+  // First, verify database connection
   const conn = await pool.getConnection();
   try {
     await conn.query("SELECT 1");
-    // Increase GROUP_CONCAT max length to avoid truncation errors
-    await conn.query("SET SESSION group_concat_max_len = 10000");
   } catch (connErr) {
     conn.release();
     handleDatabaseError(connErr, "connection check");
@@ -83,33 +81,28 @@ app.get("/api/history.csv", asyncHandler(async (req, res) => {
   }
   
   try {
+    // Fetch from device table, grouped by day
     const [rows] = await conn.query(
       `
       SELECT
         UNIX_TIMESTAMP(day_date) AS day_ts_s,
-        MIN(energy_wh) AS min_energy_wh,
-        MAX(energy_wh) AS max_energy_wh,
+        SUM(energy_wh) AS total_energy_wh,
         AVG(battery_pct) AS avg_battery_pct,
-        COALESCE(
-          (SELECT device_name 
-           FROM telemetry t2 
-           WHERE DATE(t2.ts) = day_date
-             AND t2.device_name IS NOT NULL 
-             AND t2.device_name != ''
-           ORDER BY t2.ts DESC, t2.id DESC 
-           LIMIT 1),
-          'Unknown'
-        ) AS last_device_name,
+        GROUP_CONCAT(DISTINCT device_name ORDER BY device_name SEPARATOR ', ') AS device_names,
         MIN(ts) AS first_ts,
-        MAX(ts) AS last_ts
+        MAX(ts) AS last_ts,
+        COUNT(*) AS device_count
       FROM (
         SELECT 
-          DATE(ts) AS day_date,
+          DATE(COALESCE(ts, created_at)) AS day_date,
           ts,
           energy_wh,
-          battery_pct
-        FROM telemetry
-        WHERE ts >= DATE_SUB(NOW(), INTERVAL ? DAY)
+          battery_pct,
+          device_name
+        FROM device
+        WHERE COALESCE(ts, created_at) >= DATE_SUB(NOW(), INTERVAL ? DAY)
+          AND device_name IS NOT NULL
+          AND device_name != ''
       ) AS daily_data
       GROUP BY day_date
       ORDER BY day_date ASC
@@ -117,20 +110,23 @@ app.get("/api/history.csv", asyncHandler(async (req, res) => {
       [days]
     );
     
-    console.log(`[history.csv] Query returned ${rows.length} rows`);
+    console.log(`[history.csv] Query returned ${rows.length} rows from device table`);
     
     const lines = [];
     lines.push("timestamp,energy_wh,battery_pct,device_name,session_min");
     for (const r of rows) {
       const dayTs = Number(r.day_ts_s) || 0;
-      const minE = r.min_energy_wh === null ? null : Number(r.min_energy_wh);
-      const maxE = r.max_energy_wh === null ? null : Number(r.max_energy_wh);
-      let energyWh = null;
-      if (Number.isFinite(minE) && Number.isFinite(maxE)) {
-        energyWh = Math.max(0, maxE - minE);
-      }
-      const batt = r.avg_battery_pct === null ? "" : Number(r.avg_battery_pct).toFixed(1);
-      const dev = (r.last_device_name || "Unknown").replaceAll(",", " ");
+      const energyWh = r.total_energy_wh !== null && r.total_energy_wh !== undefined 
+        ? Number(r.total_energy_wh) 
+        : "";
+      const batt = r.avg_battery_pct !== null && r.avg_battery_pct !== undefined 
+        ? Number(r.avg_battery_pct).toFixed(1) 
+        : "";
+      // Use first device name if multiple devices on same day, or "Multiple" if many
+      const dev = r.device_names 
+        ? (r.device_count > 3 ? "Multiple Devices" : r.device_names.split(',')[0].trim())
+        : "Unknown";
+      const safeDev = dev.replaceAll(",", " ");
 
       // best-effort session minutes for display (not used by dashboard charts)
       const first = r.first_ts ? new Date(r.first_ts).getTime() : null;
@@ -138,7 +134,7 @@ app.get("/api/history.csv", asyncHandler(async (req, res) => {
       const sessionMin =
         first && last && last >= first ? Math.round((last - first) / 60000) : "";
 
-      lines.push(`${dayTs},${energyWh ?? ""},${batt},${dev},${sessionMin}`);
+      lines.push(`${dayTs},${energyWh},${batt},${safeDev},${sessionMin}`);
     }
 
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
@@ -148,7 +144,9 @@ app.get("/api/history.csv", asyncHandler(async (req, res) => {
   }
 }, "HistoryCSV"));
 
-// Query stored telemetry rows for charts/reports.
+// Query stored device rows for charts/reports.
+// Note: Endpoint name kept as /api/telemetry for backward compatibility
+// but it now queries the device table instead of telemetry table.
 // Params:
 // - from: ISO date/time (optional, default: last 24h)
 // - to: ISO date/time (optional, default: now)
@@ -172,20 +170,20 @@ app.get("/api/telemetry", asyncHandler(async (req, res) => {
 
   try {
     const [rows] = await pool.query(
-      "SELECT * FROM telemetry WHERE ts BETWEEN ? AND ? ORDER BY ts ASC, id ASC LIMIT ?",
+      "SELECT * FROM device WHERE COALESCE(ts, created_at) BETWEEN ? AND ? ORDER BY COALESCE(ts, created_at) ASC, id ASC LIMIT ?",
       [from, to, limit]
     );
 
     return res.json({ ok: true, from, to, count: rows.length, data: rows });
   } catch (error) {
-    handleDatabaseError(error, "telemetry query");
+    handleDatabaseError(error, "device query");
     throw error; // Re-throw to be caught by asyncHandler
   }
 }, "API"));
 
-// Device endpoints: save and retrieve device name
+// Device endpoints: save and retrieve device data
 app.post("/api/device", asyncHandler(async (req, res) => {
-  const { device_name } = req.body;
+  const { device_name, energy_wh, battery_pct, ts } = req.body;
   
   if (!device_name || typeof device_name !== "string") {
     const error = new Error("device_name is required and must be a string");
@@ -193,20 +191,57 @@ app.post("/api/device", asyncHandler(async (req, res) => {
     throw error;
   }
   
-  if (device_name.length > 24) {
-    const error = new Error("device_name must be 24 characters or less");
+  if (device_name.length > 64) {
+    const error = new Error("device_name must be 64 characters or less");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  // Validate optional fields
+  const energyWh = energy_wh !== undefined && energy_wh !== null ? Number(energy_wh) : null;
+  const batteryPct = battery_pct !== undefined && battery_pct !== null ? Number(battery_pct) : null;
+  const timestamp = ts ? new Date(ts) : null;
+
+  if (energyWh !== null && (!Number.isFinite(energyWh) || energyWh < 0)) {
+    const error = new Error("energy_wh must be a non-negative number");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (batteryPct !== null && (!Number.isFinite(batteryPct) || batteryPct < 0 || batteryPct > 100)) {
+    const error = new Error("battery_pct must be a number between 0 and 100");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (timestamp && Number.isNaN(timestamp.getTime())) {
+    const error = new Error("ts must be a valid date");
     error.statusCode = 400;
     throw error;
   }
   
   try {
-    // Insert new device name record
+    // Insert or update device record with all fields
     const [result] = await pool.query(
-      "INSERT INTO device (device_name) VALUES (?)",
-      [device_name.trim()]
+      `INSERT INTO device (device_name, energy_wh, battery_pct, ts) 
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE 
+         energy_wh = COALESCE(VALUES(energy_wh), energy_wh),
+         battery_pct = COALESCE(VALUES(battery_pct), battery_pct),
+         ts = COALESCE(VALUES(ts), ts),
+         updated_at = CURRENT_TIMESTAMP(3)`,
+      [device_name.trim(), energyWh, batteryPct, timestamp]
     );
     
-    return res.json({ ok: true, id: result.insertId, device_name: device_name.trim() });
+    const deviceId = result.insertId || result.affectedRows > 0 ? result.insertId : null;
+    return res.json({ 
+      ok: true, 
+      id: deviceId, 
+      device_name: device_name.trim(),
+      energy_wh: energyWh,
+      battery_pct: batteryPct,
+      ts: timestamp
+    });
   } catch (error) {
     handleDatabaseError(error, "device insert");
     throw error;
@@ -216,23 +251,41 @@ app.post("/api/device", asyncHandler(async (req, res) => {
 app.get("/api/device", asyncHandler(async (req, res) => {
   try {
     const [rows] = await pool.query(
-      "SELECT device_name FROM device ORDER BY updated_at DESC, id DESC LIMIT 1"
+      "SELECT device_name, energy_wh, battery_pct, ts FROM device ORDER BY updated_at DESC, id DESC LIMIT 1"
     );
-    const device_name = rows?.[0]?.device_name || null;
-    return res.json({ ok: true, device_name });
+    const device = rows?.[0] || null;
+    return res.json({ 
+      ok: true, 
+      device_name: device?.device_name || null,
+      energy_wh: device?.energy_wh !== null && device?.energy_wh !== undefined ? Number(device.energy_wh) : null,
+      battery_pct: device?.battery_pct !== null && device?.battery_pct !== undefined ? Number(device.battery_pct) : null,
+      ts: device?.ts || null
+    });
   } catch (error) {
     handleDatabaseError(error, "device query");
     throw error;
   }
 }, "API"));
 
-// Get all registered devices
+// Get all registered devices with their data
 app.get("/api/devices", asyncHandler(async (req, res) => {
   try {
     const [rows] = await pool.query(
-      "SELECT DISTINCT device_name FROM device ORDER BY device_name ASC"
+      `SELECT device_name, energy_wh, battery_pct, ts, 
+              UNIX_TIMESTAMP(ts) as ts_unix,
+              created_at, updated_at 
+       FROM device 
+       ORDER BY device_name ASC`
     );
-    const devices = rows.map(row => row.device_name);
+    const devices = rows.map(row => ({
+      device_name: row.device_name,
+      energy_wh: row.energy_wh !== null && row.energy_wh !== undefined ? Number(row.energy_wh) : null,
+      battery_pct: row.battery_pct !== null && row.battery_pct !== undefined ? Number(row.battery_pct) : null,
+      ts: row.ts,
+      ts_unix: row.ts_unix ? Number(row.ts_unix) : null,
+      created_at: row.created_at,
+      updated_at: row.updated_at
+    }));
     return res.json({ ok: true, devices });
   } catch (error) {
     handleDatabaseError(error, "devices query");
@@ -316,7 +369,7 @@ async function startServer() {
   try {
     await initSchema();
     // Seed sample data if table is empty (or if SEED_SAMPLE_DATA=true)
-    await seedSampleTelemetry();
+    await seedSampleDevices();
   } catch (error) {
     handleDatabaseError(error, "schema initialization");
     process.exit(1);

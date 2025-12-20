@@ -513,71 +513,34 @@ User Device
 
 ### Database Schema (MySQL)
 
-**Table: `telemetry`**
-
-```sql
-CREATE TABLE telemetry (
-  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  ts TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3),
-  
-  -- Device Info
-  device_name VARCHAR(64),
-  
-  -- Sensor Data
-  top INT, `left` INT, `right` INT, avg INT,
-  horizontal_error INT, vertical_error INT,
-  
-  -- Tracking Data
-  tilt_angle INT, pan_angle INT, pan_target INT,
-  manual TINYINT(1), steady TINYINT(1),
-  
-  -- Power Metrics
-  power_w DECIMAL(10,2), power_actual_w DECIMAL(10,2),
-  temp_c DECIMAL(10,1),
-  
-  -- Battery
-  battery_pct DECIMAL(5,1), battery_v DECIMAL(6,2),
-  efficiency DECIMAL(6,1),
-  
-  -- Energy
-  energy_wh DECIMAL(12,3), energy_kwh DECIMAL(12,6),
-  
-  -- Environmental Impact
-  co2_kg DECIMAL(12,4), trees DECIMAL(12,4),
-  phones DECIMAL(12,3), phone_minutes DECIMAL(12,0),
-  pesos DECIMAL(12,2), grid_price DECIMAL(12,2),
-  
-  -- Raw Data
-  raw_json JSON,
-  
-  INDEX idx_ts (ts)
-);
-```
-
-**Key Design Decisions:**
-- **Timestamp Precision**: `TIMESTAMP(3)` for millisecond precision
-- **Indexing**: `idx_ts` on timestamp for fast time-based queries
-- **JSON Storage**: `raw_json` column stores complete telemetry packet
-- **Nullable Fields**: Most fields nullable to handle missing data
-
 **Table: `device`**
 
 ```sql
 CREATE TABLE device (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  device_name VARCHAR(24) NOT NULL,
-  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3),
-  updated_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-  INDEX idx_updated_at (updated_at)
+  device_name VARCHAR(64) NOT NULL UNIQUE,
+  energy_wh DECIMAL(12,3) NULL,
+  battery_pct DECIMAL(5,1) NULL,
+  ts TIMESTAMP(3) NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_updated_at (updated_at),
+  INDEX idx_ts (ts),
+  INDEX idx_device_name (device_name)
 );
 ```
 
-**Purpose:** Stores device names entered by users when starting a charging session.
+**Purpose:** Stores all device-related data including device names, energy values, battery percentages, and timestamps. This table replaced the telemetry table to simplify the data model.
 
 **Key Design Decisions:**
-- **Device Name Length**: Limited to 24 characters (matches ESP32 constraints)
+- **Device Name Length**: Extended to 64 characters to support longer device names
+- **Unique Constraint**: `device_name` is unique to prevent duplicates
+- **Energy & Battery**: Stores latest energy (Wh) and battery percentage per device
+- **Timestamp**: `ts` field stores when the device data was last updated
 - **Timestamp Tracking**: `created_at` and `updated_at` for audit trail
-- **Latest Value**: Queries use `ORDER BY updated_at DESC` to get most recent value
+- **Indexing**: Multiple indexes for fast queries by timestamp and device name
+
+**Note:** The `telemetry` table has been removed. All device-related data is now stored in the `device` table.
 
 **Table: `grid_price`**
 
@@ -585,16 +548,19 @@ CREATE TABLE device (
 CREATE TABLE grid_price (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   price DECIMAL(10,2) NOT NULL,
-  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3),
-  updated_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-  INDEX idx_updated_at (updated_at)
+  device_name VARCHAR(64) NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_updated_at (updated_at),
+  INDEX idx_device_name (device_name)
 );
 ```
 
-**Purpose:** Stores Batelec grid price values entered by users for savings calculations.
+**Purpose:** Stores Batelec grid price values entered by users for savings calculations. Can be associated with specific devices.
 
 **Key Design Decisions:**
 - **Price Validation**: Stored as `DECIMAL(10,2)` for precise currency calculations
+- **Device Association**: Optional `device_name` field to link prices to specific devices
 - **No Default Value**: Field starts empty, user must input and save
 - **Timestamp Tracking**: `created_at` and `updated_at` for audit trail
 - **Latest Value**: Queries use `ORDER BY updated_at DESC` to get most recent value

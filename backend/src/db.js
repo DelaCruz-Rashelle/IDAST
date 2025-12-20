@@ -49,61 +49,86 @@ export async function dbPing() {
 export async function initSchema() {
   const conn = await pool.getConnection();
   try {
-    // Create telemetry table
-    const telemetrySql = `CREATE TABLE IF NOT EXISTS telemetry (
-  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  ts TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-
-  device_name VARCHAR(64) NULL,
-
-  top INT NULL,
-  \`left\` INT NULL,
-  \`right\` INT NULL,
-  \`avg\` INT NULL,
-  horizontal_error INT NULL,
-  vertical_error INT NULL,
-
-  tilt_angle INT NULL,
-  pan_angle INT NULL,
-  pan_target INT NULL,
-  \`manual\` TINYINT(1) NULL,
-  steady TINYINT(1) NULL,
-
-  power_w DECIMAL(10,2) NULL,
-  power_actual_w DECIMAL(10,2) NULL,
-  temp_c DECIMAL(10,1) NULL,
-
-  battery_pct DECIMAL(5,1) NULL,
-  battery_v DECIMAL(6,2) NULL,
-  efficiency DECIMAL(6,1) NULL,
-
-  energy_wh DECIMAL(12,3) NULL,
-  energy_kwh DECIMAL(12,6) NULL,
-
-  co2_kg DECIMAL(12,4) NULL,
-  trees DECIMAL(12,4) NULL,
-  phones DECIMAL(12,3) NULL,
-  phone_minutes DECIMAL(12,0) NULL,
-  pesos DECIMAL(12,2) NULL,
-  grid_price DECIMAL(12,2) NULL,
-
-  raw_json JSON NULL,
-
-  INDEX idx_ts (ts)
-)`;
-    await conn.query(telemetrySql);
-    console.log("Database schema initialized (telemetry table ready)");
-
-    // Create device table
+    // Create device table (with all device-related display data)
     const deviceSql = `CREATE TABLE IF NOT EXISTS device (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  device_name VARCHAR(24) NOT NULL,
+  device_name VARCHAR(64) NOT NULL UNIQUE,
+  energy_wh DECIMAL(12,3) NULL,
+  battery_pct DECIMAL(5,1) NULL,
+  ts TIMESTAMP(3) NULL,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-  INDEX idx_updated_at (updated_at)
+  INDEX idx_updated_at (updated_at),
+  INDEX idx_ts (ts),
+  INDEX idx_device_name (device_name)
 )`;
     await conn.query(deviceSql);
     console.log("Database schema initialized (device table ready)");
+
+    // Migration: Add new columns if they don't exist (for existing databases)
+    try {
+      const [columns] = await conn.query(
+        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device'"
+      );
+      const existingColumns = columns.map(c => c.COLUMN_NAME);
+      
+      if (!existingColumns.includes('energy_wh')) {
+        console.log("[Migration] Adding energy_wh column to device table...");
+        await conn.query("ALTER TABLE device ADD COLUMN energy_wh DECIMAL(12,3) NULL AFTER device_name");
+        console.log("[Migration] ✅ energy_wh column added");
+      }
+      
+      if (!existingColumns.includes('battery_pct')) {
+        console.log("[Migration] Adding battery_pct column to device table...");
+        await conn.query("ALTER TABLE device ADD COLUMN battery_pct DECIMAL(5,1) NULL AFTER energy_wh");
+        console.log("[Migration] ✅ battery_pct column added");
+      }
+      
+      if (!existingColumns.includes('ts')) {
+        console.log("[Migration] Adding ts column to device table...");
+        await conn.query("ALTER TABLE device ADD COLUMN ts TIMESTAMP(3) NULL AFTER battery_pct");
+        await conn.query("ALTER TABLE device ADD INDEX idx_ts (ts)");
+        console.log("[Migration] ✅ ts column added");
+      }
+
+      // Update device_name length if needed
+      const [deviceNameCol] = await conn.query(
+        "SELECT CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device' AND COLUMN_NAME = 'device_name'"
+      );
+      if (deviceNameCol.length > 0 && deviceNameCol[0].CHARACTER_MAXIMUM_LENGTH < 64) {
+        console.log("[Migration] Expanding device_name column length...");
+        await conn.query("ALTER TABLE device MODIFY COLUMN device_name VARCHAR(64) NOT NULL");
+        console.log("[Migration] ✅ device_name column expanded");
+      }
+
+      // Add unique constraint on device_name if it doesn't exist
+      const [constraints] = await conn.query(
+        "SELECT CONSTRAINT_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device' AND CONSTRAINT_TYPE = 'UNIQUE' AND CONSTRAINT_NAME LIKE '%device_name%'"
+      );
+      if (constraints.length === 0) {
+        console.log("[Migration] Adding unique constraint on device_name...");
+        // First, remove duplicates if any exist
+        await conn.query(`
+          DELETE d1 FROM device d1
+          INNER JOIN device d2 
+          WHERE d1.id > d2.id AND d1.device_name = d2.device_name
+        `);
+        await conn.query("ALTER TABLE device ADD UNIQUE KEY uk_device_name (device_name)");
+        console.log("[Migration] ✅ unique constraint on device_name added");
+      }
+
+      // Add index for device_name if it doesn't exist (separate from unique constraint)
+      const [indexes] = await conn.query(
+        "SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device' AND INDEX_NAME = 'idx_device_name'"
+      );
+      if (indexes.length === 0) {
+        console.log("[Migration] Adding idx_device_name index...");
+        await conn.query("ALTER TABLE device ADD INDEX idx_device_name (device_name)");
+        console.log("[Migration] ✅ idx_device_name index added");
+      }
+    } catch (migrationError) {
+      console.log("[Migration] Note: Device table migration skipped (may already be up to date)");
+    }
 
     // Create grid_price table (with device connection)
     const gridPriceSql = `CREATE TABLE IF NOT EXISTS grid_price (
@@ -141,167 +166,75 @@ export async function initSchema() {
   }
 }
 
-// Seed sample telemetry data for testing/display purposes
-export async function seedSampleTelemetry() {
+// Seed sample device data for testing/display purposes
+export async function seedSampleDevices() {
   const conn = await pool.getConnection();
   try {
-    // Check if telemetry table already has data
-    const [existingRows] = await conn.query("SELECT COUNT(*) as count FROM telemetry");
+    // Check if device table already has data
+    const [existingRows] = await conn.query("SELECT COUNT(*) as count FROM device");
     const existingCount = existingRows[0]?.count || 0;
     
     // Only seed if table is empty (or if explicitly enabled via env var)
     const forceSeed = process.env.SEED_SAMPLE_DATA === "true";
     if (existingCount > 0 && !forceSeed) {
-      console.log(`[Seed] Telemetry table already has ${existingCount} rows, skipping sample data`);
+      console.log(`[Seed] Device table already has ${existingCount} rows, skipping sample data`);
       return;
     }
 
-    console.log("[Seed] Inserting 5 sample telemetry entries...");
+    console.log("[Seed] Inserting 5 sample device entries...");
 
     // Get current time and create timestamps for the last 5 days
     const now = new Date();
-    const sampleData = [
+
+    // Insert device data into device table with all necessary fields
+    const deviceData = [
       {
         device_name: "iPhone 15 Pro",
         energy_wh: 1250.5,
-        energy_kwh: 1.2505,
         battery_pct: 85.5,
-        battery_v: 4.15,
-        power_w: 12.5,
-        power_actual_w: 12.3,
-        temp_c: 28.5,
-        efficiency: 92.5,
-        grid_price: 12.0,
-        co2_kg: 0.625,
-        trees: 0.031,
-        phones: 1.25,
-        phone_minutes: 450,
-        pesos: 15.01,
         ts: new Date(now.getTime() - 4 * 24 * 60 * 60 * 1000), // 4 days ago
       },
       {
         device_name: "iPhone 14",
         energy_wh: 980.3,
-        energy_kwh: 0.9803,
         battery_pct: 78.2,
-        battery_v: 4.08,
-        power_w: 10.2,
-        power_actual_w: 10.0,
-        temp_c: 29.1,
-        efficiency: 90.8,
-        grid_price: 12.0,
-        co2_kg: 0.490,
-        trees: 0.025,
-        phones: 0.98,
-        phone_minutes: 360,
-        pesos: 11.76,
         ts: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000), // 3 days ago
       },
       {
         device_name: "Infinix Hot 50 Pro Plus",
         energy_wh: 2100.8,
-        energy_kwh: 2.1008,
         battery_pct: 92.0,
-        battery_v: 4.25,
-        power_w: 18.5,
-        power_actual_w: 18.2,
-        temp_c: 27.8,
-        efficiency: 94.2,
-        grid_price: 12.0,
-        co2_kg: 1.050,
-        trees: 0.052,
-        phones: 2.10,
-        phone_minutes: 720,
-        pesos: 25.21,
         ts: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000), // 2 days ago
       },
       {
         device_name: "Xiaomi Redmi 13C",
         energy_wh: 750.2,
-        energy_kwh: 0.7502,
         battery_pct: 72.5,
-        battery_v: 4.02,
-        power_w: 8.5,
-        power_actual_w: 8.3,
-        temp_c: 30.2,
-        efficiency: 88.5,
-        grid_price: 12.0,
-        co2_kg: 0.375,
-        trees: 0.019,
-        phones: 0.75,
-        phone_minutes: 270,
-        pesos: 9.00,
         ts: new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000), // 1 day ago
       },
       {
         device_name: "Huawei Nova 5T",
         energy_wh: 1100.6,
-        energy_kwh: 1.1006,
         battery_pct: 88.3,
-        battery_v: 4.18,
-        power_w: 11.8,
-        power_actual_w: 11.6,
-        temp_c: 28.9,
-        efficiency: 91.5,
-        grid_price: 12.0,
-        co2_kg: 0.550,
-        trees: 0.028,
-        phones: 1.10,
-        phone_minutes: 400,
-        pesos: 13.21,
         ts: new Date(now.getTime() - 0.5 * 24 * 60 * 60 * 1000), // 12 hours ago
       },
     ];
 
-    // Insert each sample entry
-    for (const data of sampleData) {
+    for (const device of deviceData) {
+      // Use INSERT ... ON DUPLICATE KEY UPDATE to update existing devices or insert new ones
       await conn.query(
-        `INSERT INTO telemetry (
-          device_name, energy_wh, energy_kwh, battery_pct, battery_v,
-          power_w, power_actual_w, temp_c, efficiency,
-          grid_price, co2_kg, trees, phones, phone_minutes, pesos, ts
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          data.device_name,
-          data.energy_wh,
-          data.energy_kwh,
-          data.battery_pct,
-          data.battery_v,
-          data.power_w,
-          data.power_actual_w,
-          data.temp_c,
-          data.efficiency,
-          data.grid_price,
-          data.co2_kg,
-          data.trees,
-          data.phones,
-          data.phone_minutes,
-          data.pesos,
-          data.ts,
-        ]
+        `INSERT INTO device (device_name, energy_wh, battery_pct, ts) 
+         VALUES (?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE 
+           energy_wh = VALUES(energy_wh),
+           battery_pct = VALUES(battery_pct),
+           ts = VALUES(ts),
+           updated_at = CURRENT_TIMESTAMP(3)`,
+        [device.device_name, device.energy_wh, device.battery_pct, device.ts]
       );
     }
 
-    console.log("[Seed] ✅ Successfully inserted 5 sample telemetry entries");
-
-    // Also insert device names into device table
-    const deviceNames = [
-      "iPhone 15 Pro",
-      "iPhone 14",
-      "Infinix Hot 50 Pro Plus",
-      "Xiaomi Redmi 13C",
-      "Huawei Nova 5T"
-    ];
-
-    for (const deviceName of deviceNames) {
-      // Use INSERT IGNORE to avoid duplicate key errors if device already exists
-      await conn.query(
-        "INSERT IGNORE INTO device (device_name) VALUES (?)",
-        [deviceName]
-      );
-    }
-
-    console.log("[Seed] ✅ Successfully registered 5 sample devices");
+    console.log("[Seed] ✅ Successfully registered 5 sample devices with energy, battery, and timestamp data");
 
     // Insert sample grid prices for each device
     const gridPrices = [
