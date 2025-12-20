@@ -124,20 +124,20 @@ export default function Home() {
     }
   }, []);
 
-  // Load data on mount and set up intervals
+  // Load data on mount (no automatic polling - data only updates when user saves)
   useEffect(() => {
     // Only start if authenticated
     if (typeof window !== "undefined" && sessionStorage.getItem("isAuthenticated")) {
       // Stagger initial requests to avoid ERR_INSUFFICIENT_RESOURCES
-      // Load history first (most important)
+      // Load history first (most important) - only once on mount
       historyData.loadHistory();
       
-      // Load device stats after a short delay
+      // Load device stats after a short delay - only once on mount
       setTimeout(() => {
         historyData.loadDeviceStats();
       }, 500);
       
-      // Load registered devices after another delay
+      // Load registered devices after another delay - only once on mount
       setTimeout(() => {
         loadRegisteredDevices();
       }, 1000);
@@ -146,14 +146,13 @@ export default function Home() {
       // Fields should start empty on new session and only be populated by user input
       // On refresh, sessionStorage values are already restored in the auth check useEffect
       
-      const historyInterval = setInterval(historyData.loadHistory, 30000);
-      const deviceStatsInterval = setInterval(historyData.loadDeviceStats, 30000); // Refresh device stats every 30 seconds
-      const devicesInterval = setInterval(loadRegisteredDevices, 60000); // Refresh every minute
+      // NOTE: No automatic polling intervals - data only updates when:
+      // - User clicks "Refresh History" button
+      // - User saves device state
+      // - User saves grid price
+      // This prevents ERR_INSUFFICIENT_RESOURCES and unnecessary API calls
       
       return () => {
-        clearInterval(historyInterval);
-        clearInterval(deviceStatsInterval);
-        clearInterval(devicesInterval);
         if (deviceNameDebounceRef.current) clearTimeout(deviceNameDebounceRef.current);
       };
     }
@@ -737,7 +736,10 @@ export default function Home() {
               <div style={{ display: "flex", gap: "12px", marginTop: "12px" }}>
                 <button
                   className="manual-btn alt full-width"
-                  onClick={historyData.loadHistory}
+                  onClick={() => {
+                    historyData.loadHistory();
+                    historyData.loadDeviceStats();
+                  }}
                 >
                   Refresh History
                 </button>
