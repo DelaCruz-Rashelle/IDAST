@@ -98,15 +98,18 @@ export function useHistoryData(onHistoryLoaded) {
     setHistoryLogsLoading(true);
     // Open modal immediately so user can see loading state or errors
     setHistoryLogsOpen(true);
+    let fetchUrl = ""; // Declare outside try for error logging
     try {
       if (!RAILWAY_API_BASE_URL) {
-        throw new Error("Backend API not configured");
+        throw new Error("Backend API not configured. Please set NEXT_PUBLIC_RAILWAY_API_BASE_URL environment variable.");
       }
       
       const base = RAILWAY_API_BASE_URL.endsWith("/")
         ? RAILWAY_API_BASE_URL.slice(0, -1)
         : RAILWAY_API_BASE_URL;
-      const fetchUrl = `${base}/api/history-logs?limit=100`;
+      fetchUrl = `${base}/api/history-logs?limit=100`;
+      
+      console.log("[History Logs] Fetching from:", fetchUrl);
       
       const res = await fetch(fetchUrl);
       if (!res.ok) {
@@ -131,14 +134,27 @@ export function useHistoryData(onHistoryLoaded) {
           device_states: data.device_states || [],
           grid_prices: data.grid_prices || []
         });
+        setHistoryLogsError(""); // Clear any previous errors on success
       } else {
         throw new Error(data.error || "Failed to load history logs");
       }
     } catch (e) {
-      const errorMsg = e.message || String(e);
+      // Handle network errors and other exceptions
+      let errorMsg = e.message || String(e);
+      
+      // If it's a network error, provide a more user-friendly message
+      if (errorMsg.includes("Failed to fetch") || errorMsg.includes("NetworkError") || errorMsg.includes("fetch")) {
+        if (!RAILWAY_API_BASE_URL) {
+          errorMsg = "Backend API not configured. Please set NEXT_PUBLIC_RAILWAY_API_BASE_URL environment variable.";
+        } else {
+          errorMsg = `Unable to connect to backend API at ${fetchUrl || RAILWAY_API_BASE_URL}. Please check if the server is running and the endpoint exists.`;
+        }
+      }
+      
       setHistoryLogsError(errorMsg);
-      handleApiError(e, setHistoryLogsError, "load history logs");
       console.error("History logs fetch error:", e);
+      console.error("Failed URL:", fetchUrl);
+      console.error("Railway API Base URL:", RAILWAY_API_BASE_URL);
     } finally {
       setHistoryLogsLoading(false);
     }
