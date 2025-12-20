@@ -73,16 +73,9 @@ export default function Home() {
         }
       });
     }
-    
-    // Update history data hook callback
-    if (historyData.setOnHistoryLoaded) {
-      historyData.setOnHistoryLoaded((csvData) => {
-        if (charts.drawHistoryChart) {
-          charts.drawHistoryChart(csvData);
-        }
-      });
-    }
-  }, [setCurrentDevice]);
+    // Note: History chart drawing is handled by useCharts useEffect watching historyData
+    // No need for callback mechanism - it would cause duplicate drawing
+  }, [setCurrentDevice, mqtt.setSetCurrentDevice, mqtt.setOnTelemetryProcessed, charts.drawSensorGraph]);
 
 
   // Check authentication on mount and handle input field persistence
@@ -133,12 +126,12 @@ export default function Home() {
       historyData.loadHistory();
       
       // Load device stats after a short delay - only once on mount
-      setTimeout(() => {
+      const deviceStatsTimeout = setTimeout(() => {
         historyData.loadDeviceStats();
       }, 500);
       
       // Load registered devices after another delay - only once on mount
-      setTimeout(() => {
+      const devicesTimeout = setTimeout(() => {
         loadRegisteredDevices();
       }, 1000);
       
@@ -154,9 +147,12 @@ export default function Home() {
       
       return () => {
         if (deviceNameDebounceRef.current) clearTimeout(deviceNameDebounceRef.current);
+        clearTimeout(deviceStatsTimeout);
+        clearTimeout(devicesTimeout);
       };
     }
-  }, [router, mqtt.mqttConnected, historyData.loadHistory, historyData.loadDeviceStats, loadRegisteredDevices]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run once on mount - functions are memoized in hooks
 
 
 
@@ -614,14 +610,20 @@ export default function Home() {
           <div className="card grid-full">
             <h3>Monthly Report — Energy History</h3>
             <div className="content">
-              {historyData.historyLoading && (
+              {(historyData.historyLoading || historyData.deviceStatsLoading) && (
                 <div style={{ marginBottom: "16px", color: "var(--muted)", fontSize: "13px" }}>
-                  Loading history data...
+                  {historyData.historyLoading && "Loading history data... "}
+                  {historyData.deviceStatsLoading && "Loading device statistics... "}
                 </div>
               )}
               {!historyData.historyLoading && historyData.historyError && (
                 <div className="history-error">
                   <strong>History Error:</strong> {historyData.historyError}
+                </div>
+              )}
+              {!historyData.deviceStatsLoading && historyData.deviceStatsError && (
+                <div className="history-error" style={{ marginTop: historyData.historyError ? "8px" : "0" }}>
+                  <strong>Device Stats Error:</strong> {historyData.deviceStatsError}
                 </div>
               )}
               <div className="history-chart relative">
@@ -737,11 +739,15 @@ export default function Home() {
                 <button
                   className="manual-btn alt full-width"
                   onClick={() => {
-                    historyData.loadHistory();
-                    historyData.loadDeviceStats();
+                    // Prevent duplicate calls if already loading
+                    if (!historyData.historyLoading && !historyData.deviceStatsLoading) {
+                      historyData.loadHistory();
+                      historyData.loadDeviceStats();
+                    }
                   }}
+                  disabled={historyData.historyLoading || historyData.deviceStatsLoading}
                 >
-                  Refresh History
+                  {historyData.historyLoading || historyData.deviceStatsLoading ? "Refreshing..." : "Refresh History"}
                 </button>
                 <button
                   className="manual-btn full-width"

@@ -19,6 +19,8 @@ export function useHistoryData(onHistoryLoaded) {
   const [historyError, setHistoryError] = useState("");
   const [historyLoading, setHistoryLoading] = useState(false); // Loading state for history fetch
   const [deviceStatsData, setDeviceStatsData] = useState(null); // Device statistics from API
+  const [deviceStatsError, setDeviceStatsError] = useState(""); // Error state for device stats
+  const [deviceStatsLoading, setDeviceStatsLoading] = useState(false); // Loading state for device stats
   const [historyLogsOpen, setHistoryLogsOpen] = useState(false);
   const [historyLogsData, setHistoryLogsData] = useState({ device_states: [], grid_prices: [] });
   const [historyLogsLoading, setHistoryLogsLoading] = useState(false);
@@ -26,7 +28,7 @@ export function useHistoryData(onHistoryLoaded) {
   const [historyLogsTab, setHistoryLogsTab] = useState("device_state"); // "device_state" or "grid_price"
 
   // Load history CSV for graph display
-  const loadHistory = async () => {
+  const loadHistory = useCallback(async () => {
     setHistoryError(""); // Clear previous errors
     setHistoryLoading(true); // Set loading state to prevent flickering
     let fetchUrl = ""; // Declare outside try for error logging
@@ -111,7 +113,7 @@ export function useHistoryData(onHistoryLoaded) {
     } finally {
       setHistoryLoading(false); // Clear loading state
     }
-  };
+  }, []);
 
   const loadHistoryLogs = async () => {
     setHistoryLogsError("");
@@ -181,9 +183,14 @@ export function useHistoryData(onHistoryLoaded) {
   };
 
   // Load device statistics from device table for Monthly Report calculations
-  const loadDeviceStats = async () => {
+  const loadDeviceStats = useCallback(async () => {
+    setDeviceStatsError(""); // Clear previous errors
+    setDeviceStatsLoading(true); // Set loading state
+    let fetchUrl = ""; // Declare outside try for error logging
     try {
       if (!RAILWAY_API_BASE_URL) {
+        const errorMsg = "Backend API not configured. Please set NEXT_PUBLIC_RAILWAY_API_BASE_URL environment variable.";
+        setDeviceStatsError(errorMsg);
         console.log("[Device Stats] API not configured");
         return; // API not configured
       }
@@ -192,7 +199,7 @@ export function useHistoryData(onHistoryLoaded) {
         ? RAILWAY_API_BASE_URL.slice(0, -1)
         : RAILWAY_API_BASE_URL;
       
-      const fetchUrl = `${base}/api/device-stats?days=60`;
+      fetchUrl = `${base}/api/device-stats?days=60`;
       console.log("[Device Stats] Fetching from:", fetchUrl);
       
       // Create abort controller for timeout
@@ -210,24 +217,55 @@ export function useHistoryData(onHistoryLoaded) {
         if (json.ok) {
           console.log("[Device Stats] Loaded:", json.deviceStats?.length || 0, "devices");
           setDeviceStatsData(json);
+          setDeviceStatsError(""); // Clear any previous errors on success
         } else {
+          const errorMsg = json.error || "Failed to load device statistics";
+          setDeviceStatsError(errorMsg);
           console.error("[Device Stats] API returned error:", json);
         }
       } else {
         const errorText = await res.text();
+        let errorMsg = `Device stats fetch failed: ${res.status} ${res.statusText}`;
+        try {
+          const errorJson = JSON.parse(errorText);
+          if (errorJson.error) {
+            errorMsg = `Device stats error: ${errorJson.error}`;
+          }
+        } catch (e) {
+          if (errorText && errorText.trim()) {
+            errorMsg = `Device stats error: ${errorText.substring(0, 200)}`;
+          }
+        }
+        setDeviceStatsError(errorMsg);
         console.error("[Device Stats] Failed to load:", res.status, errorText);
       }
     } catch (e) {
       // Handle timeout and network errors gracefully
+      let errorMsg = e.message || String(e);
+      
       if (e.name === 'AbortError' || e.name === 'TimeoutError') {
+        errorMsg = "Request timed out. The server may be slow or overloaded. Please try again.";
         console.error("[Device Stats] Request timeout:", e);
-      } else if (e.message?.includes('ERR_INSUFFICIENT_RESOURCES')) {
-        console.warn("[Device Stats] Browser resource limit reached, will retry on next interval");
+      } else if (errorMsg.includes('ERR_INSUFFICIENT_RESOURCES') || errorMsg.includes('Insufficient')) {
+        errorMsg = "Too many requests. Please wait a moment and refresh the page.";
+        console.warn("[Device Stats] Browser resource limit reached");
+      } else if (errorMsg.includes("Failed to fetch") || errorMsg.includes("NetworkError") || errorMsg.includes("fetch")) {
+        if (!RAILWAY_API_BASE_URL) {
+          errorMsg = "Backend API not configured. Please set NEXT_PUBLIC_RAILWAY_API_BASE_URL environment variable.";
+        } else {
+          errorMsg = `Unable to connect to backend API. Please check if the server is running and accessible at ${RAILWAY_API_BASE_URL}`;
+        }
+        console.error("[Device Stats] Fetch error:", e);
       } else {
         console.error("[Device Stats] Fetch error:", e);
       }
+      
+      setDeviceStatsError(errorMsg);
+      console.error("[Device Stats] Failed URL:", fetchUrl);
+    } finally {
+      setDeviceStatsLoading(false); // Clear loading state
     }
-  };
+  }, []);
 
   // Setter function to update callback
   const setOnHistoryLoaded = useCallback((callback) => {
@@ -240,6 +278,8 @@ export function useHistoryData(onHistoryLoaded) {
     historyError,
     historyLoading,
     deviceStatsData,
+    deviceStatsError,
+    deviceStatsLoading,
     historyLogsOpen,
     setHistoryLogsOpen,
     historyLogsData,
