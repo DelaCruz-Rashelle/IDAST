@@ -13,6 +13,7 @@ export default function Home() {
   const router = useRouter();
   const [data, setData] = useState(null);
   const [historyData, setHistoryData] = useState("");
+  const [deviceStatsData, setDeviceStatsData] = useState(null); // Device statistics from API
   const [manual, setManual] = useState(false);
   const [tiltValue, setTiltValue] = useState(90);
   const [panValue, setPanValue] = useState(90);
@@ -417,7 +418,7 @@ export default function Home() {
     });
   };
 
-  // Load history
+  // Load history CSV for graph display
   const loadHistory = async () => {
     setHistoryError(""); // Clear previous errors
     let fetchUrl = ""; // Declare outside try for error logging
@@ -464,6 +465,31 @@ export default function Home() {
       handleApiError(new Error(errorMsg), setHistoryError, "fetch history");
       console.error("History fetch error:", e);
       console.error("Failed URL:", fetchUrl);
+    }
+  };
+
+  // Load device statistics from device table for Monthly Report calculations
+  const loadDeviceStats = async () => {
+    try {
+      if (!RAILWAY_API_BASE_URL) {
+        return; // API not configured
+      }
+
+      const base = RAILWAY_API_BASE_URL.endsWith("/")
+        ? RAILWAY_API_BASE_URL.slice(0, -1)
+        : RAILWAY_API_BASE_URL;
+      
+      const res = await fetch(`${base}/api/device-stats?days=60`);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.ok) {
+          setDeviceStatsData(json);
+        }
+      } else {
+        console.error("Failed to load device stats:", res.status);
+      }
+    } catch (e) {
+      console.error("Device stats fetch error:", e);
     }
   };
 
@@ -742,7 +768,7 @@ export default function Home() {
     }
   };
 
-  // Check authentication on mount
+  // Check authentication on mount and handle input field persistence
   useEffect(() => {
     if (typeof window !== "undefined") {
       const isAuthenticated = sessionStorage.getItem("isAuthenticated");
@@ -750,21 +776,80 @@ export default function Home() {
         router.push("/login");
         return;
       }
+
+      // Check if this is a page refresh or a new session
+      const isPageRefresh = sessionStorage.getItem("isPageRefresh");
+      
+      if (isPageRefresh === "true") {
+        // Page refresh: restore input values from sessionStorage
+        const savedDeviceName = sessionStorage.getItem("deviceNameInput");
+        const savedGridPrice = sessionStorage.getItem("gridPriceInput");
+        
+        if (savedDeviceName !== null) {
+          setDeviceName(savedDeviceName);
+        }
+        if (savedGridPrice !== null) {
+          setGridPrice(savedGridPrice);
+        }
+      } else {
+        // New session (tab closed/reopened or logged out): clear inputs
+        setDeviceName("");
+        setGridPrice("");
+        sessionStorage.removeItem("deviceNameInput");
+        sessionStorage.removeItem("gridPriceInput");
+      }
+      
+      // Set refresh flag for next time (if user refreshes, this will be true)
+      sessionStorage.setItem("isPageRefresh", "true");
     }
   }, [router]);
+
+  // Handle tab/browser close: clear input values
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const handleBeforeUnload = () => {
+        // Clear the refresh flag and input values when tab/browser closes
+        sessionStorage.removeItem("isPageRefresh");
+        sessionStorage.removeItem("deviceNameInput");
+        sessionStorage.removeItem("gridPriceInput");
+      };
+
+      window.addEventListener("beforeunload", handleBeforeUnload);
+      window.addEventListener("pagehide", handleBeforeUnload);
+
+      return () => {
+        window.removeEventListener("beforeunload", handleBeforeUnload);
+        window.removeEventListener("pagehide", handleBeforeUnload);
+      };
+    }
+  }, []);
 
   useEffect(() => {
     // Only start if authenticated
     if (typeof window !== "undefined" && sessionStorage.getItem("isAuthenticated")) {
       loadHistory();
-      loadDeviceName();
-      loadGridPrice();
+      loadDeviceStats(); // Load device statistics for Monthly Report
       loadRegisteredDevices();
+      
+      // Only load from database if sessionStorage doesn't have values (new session)
+      // On refresh, sessionStorage values are already restored in the auth check useEffect
+      const savedDeviceName = sessionStorage.getItem("deviceNameInput");
+      const savedGridPrice = sessionStorage.getItem("gridPriceInput");
+      
+      if (!savedDeviceName) {
+        loadDeviceName();
+      }
+      if (!savedGridPrice) {
+        loadGridPrice();
+      }
+      
       const historyInterval = setInterval(loadHistory, 30000);
+      const deviceStatsInterval = setInterval(loadDeviceStats, 30000); // Refresh device stats every 30 seconds
       const devicesInterval = setInterval(loadRegisteredDevices, 60000); // Refresh every minute
       
       return () => {
         clearInterval(historyInterval);
+        clearInterval(deviceStatsInterval);
         clearInterval(devicesInterval);
         if (deviceNameDebounceRef.current) clearTimeout(deviceNameDebounceRef.current);
       };
@@ -841,8 +926,8 @@ export default function Home() {
   }, [historyData, registeredDevices]);
 
 
-  // Calculate total energy for registered devices only
-  const totalEnergyKWh = historyData
+  // Calculate total energy for registered devices only (fallback - will be overridden by API data)
+  const totalEnergyKWhFallback = historyData
     ? (() => {
         const lines = historyData.trim().split("\n").slice(1);
         if (registeredDevices.length === 0) {
@@ -864,8 +949,8 @@ export default function Home() {
       })()
     : 0;
 
-  // Calculate device statistics from history data, filtered to registered devices only
-  const deviceStats = historyData
+  // Calculate device statistics from history data, filtered to registered devices only (fallback - will be overridden by API data)
+  const deviceStatsFallback = historyData
     ? (() => {
         const lines = historyData.trim().split("\n").slice(1);
         const stats = {};
@@ -930,6 +1015,23 @@ export default function Home() {
       })()
     : [];
 
+  // Use device statistics from API (fetched directly from device table)
+  // This overrides the historyData-based calculations above
+  const totalEnergyKWhFromAPI = deviceStatsData?.totalEnergyKWh || 0;
+  const avgPerDayFromAPI = deviceStatsData?.avgPerDay || 0;
+  
+  // Filter device stats to registered devices only
+  const deviceStatsFromAPI = deviceStatsData?.deviceStats 
+    ? deviceStatsData.deviceStats.filter(stat => 
+        registeredDevices.length === 0 || registeredDevices.includes(stat.name)
+      )
+    : [];
+
+  // Use API data if available, otherwise fall back to historyData calculations
+  const totalEnergyKWh = totalEnergyKWhFromAPI > 0 ? totalEnergyKWhFromAPI : totalEnergyKWhFallback;
+  const avgPerDay = avgPerDayFromAPI > 0 ? avgPerDayFromAPI : (historyData ? (totalEnergyKWhFallback / Math.max(historyData.trim().split("\n").slice(1).length, 1)) : 0);
+  const deviceStats = deviceStatsFromAPI.length > 0 ? deviceStatsFromAPI : deviceStatsFallback;
+
 
 
   return (
@@ -953,8 +1055,15 @@ export default function Home() {
               className="logout-btn"
               onClick={() => {
                 if (typeof window !== "undefined") {
+                  // Clear authentication and input field data on logout
                   sessionStorage.removeItem("isAuthenticated");
                   sessionStorage.removeItem("email");
+                  sessionStorage.removeItem("isPageRefresh");
+                  sessionStorage.removeItem("deviceNameInput");
+                  sessionStorage.removeItem("gridPriceInput");
+                  // Clear input fields
+                  setDeviceName("");
+                  setGridPrice("");
                   router.push("/login");
                 }
               }}
@@ -1188,6 +1297,10 @@ export default function Home() {
                     onChange={(e) => {
                       const newName = e.target.value;
                       setDeviceName(newName);
+                      // Save to sessionStorage for refresh persistence
+                      if (typeof window !== "undefined") {
+                        sessionStorage.setItem("deviceNameInput", newName);
+                      }
                       // Debounce device name change
                       if (deviceNameDebounceRef.current) {
                         clearTimeout(deviceNameDebounceRef.current);
@@ -1258,6 +1371,10 @@ export default function Home() {
                         // Prevent telemetry from interfering while user is typing
                         const newValue = e.target.value;
                         setGridPrice(newValue);
+                        // Save to sessionStorage for refresh persistence
+                        if (typeof window !== "undefined") {
+                          sessionStorage.setItem("gridPriceInput", newValue);
+                        }
                         // Mark that user is actively editing, so telemetry won't overwrite
                         if (newValue !== "") {
                           gridPriceLoadedFromDbRef.current = true;
@@ -1403,10 +1520,7 @@ export default function Home() {
                     <tr>
                       <td>Average per Day</td>
                       <td>
-                        {historyData
-                          ? (totalEnergyKWh / Math.max(historyData.trim().split("\n").slice(1).length, 1)).toFixed(3)
-                          : "0.000"}{" "}
-                        kWh
+                        {avgPerDay > 0 ? avgPerDay.toFixed(3) : "0.000"} kWh
                       </td>
                     </tr>
                     <tr id="estimated-savings-row">
@@ -1420,25 +1534,8 @@ export default function Home() {
                     <tr>
                       <td>Most Active Device</td>
                       <td>
-                        {historyData
-                          ? (() => {
-                              const lines = historyData.trim().split("\n").slice(1);
-                              const deviceEnergy = {};
-                              lines.forEach((line) => {
-                                const parts = line.split(",");
-                                if (parts.length >= 4) {
-                                  const device = parts[3] || "Unknown";
-                                  const energy = parseFloat(parts[1]) || 0;
-                                  deviceEnergy[device] = (deviceEnergy[device] || 0) + energy;
-                                }
-                              });
-                              const entries = Object.entries(deviceEnergy);
-                              if (entries.length === 0) return "—";
-                              const mostActive = entries.reduce((max, [device, energy]) =>
-                                energy > max[1] ? [device, energy] : max
-                              );
-                              return mostActive[0] !== "Unknown" ? mostActive[0] : "—";
-                            })()
+                        {deviceStats.length > 0
+                          ? deviceStats[0].name
                           : "—"}
                       </td>
                     </tr>

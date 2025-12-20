@@ -549,6 +549,7 @@ CREATE TABLE grid_price (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   price DECIMAL(10,2) NOT NULL,
   device_name VARCHAR(64) NULL,
+  estimated_savings DECIMAL(12,2) NULL,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   INDEX idx_updated_at (updated_at),
@@ -561,6 +562,7 @@ CREATE TABLE grid_price (
 **Key Design Decisions:**
 - **Price Validation**: Stored as `DECIMAL(10,2)` for precise currency calculations
 - **Device Association**: Optional `device_name` field to link prices to specific devices
+- **Estimated Savings**: Automatically calculated when grid price is saved (total energy kWh × price)
 - **No Default Value**: Field starts empty, user must input and save
 - **Timestamp Tracking**: `created_at` and `updated_at` for audit trail
 - **Latest Value**: Queries use `ORDER BY updated_at DESC` to get most recent value

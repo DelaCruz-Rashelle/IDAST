@@ -135,6 +135,7 @@ export async function initSchema() {
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   price DECIMAL(10,2) NOT NULL,
   device_name VARCHAR(64) NULL,
+  estimated_savings DECIMAL(12,2) NULL,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   INDEX idx_updated_at (updated_at),
@@ -146,17 +147,25 @@ export async function initSchema() {
     // Migration: Add device_name column if it doesn't exist (for existing databases)
     try {
       const [columns] = await conn.query(
-        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'grid_price' AND COLUMN_NAME = 'device_name'"
+        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'grid_price'"
       );
-      if (columns.length === 0) {
+      const existingColumns = columns.map(c => c.COLUMN_NAME);
+      
+      if (!existingColumns.includes('device_name')) {
         console.log("[Migration] Adding device_name column to grid_price table...");
         await conn.query("ALTER TABLE grid_price ADD COLUMN device_name VARCHAR(64) NULL AFTER price");
         await conn.query("ALTER TABLE grid_price ADD INDEX idx_device_name (device_name)");
         console.log("[Migration] ✅ device_name column added to grid_price table");
       }
+      
+      if (!existingColumns.includes('estimated_savings')) {
+        console.log("[Migration] Adding estimated_savings column to grid_price table...");
+        await conn.query("ALTER TABLE grid_price ADD COLUMN estimated_savings DECIMAL(12,2) NULL AFTER device_name");
+        console.log("[Migration] ✅ estimated_savings column added to grid_price table");
+      }
     } catch (migrationError) {
       // Migration errors are non-fatal - table might not exist yet or column might already exist
-      console.log("[Migration] Note: device_name column migration skipped (may already exist)");
+      console.log("[Migration] Note: grid_price table migration skipped (may already exist)");
     }
   } catch (error) {
     handleDatabaseError(error, "schema initialization");
@@ -236,24 +245,40 @@ export async function seedSampleDevices() {
 
     console.log("[Seed] ✅ Successfully registered 5 sample devices with energy, battery, and timestamp data");
 
-    // Insert sample grid prices for each device
+    // Insert sample grid prices for each device (with different prices per device)
     const gridPrices = [
-      { device_name: "iPhone 15 Pro", price: 12.0 },
-      { device_name: "iPhone 14", price: 12.0 },
-      { device_name: "Infinix Hot 50 Pro Plus", price: 12.0 },
-      { device_name: "Xiaomi Redmi 13C", price: 12.0 },
-      { device_name: "Huawei Nova 5T", price: 12.0 }
+      { device_name: "iPhone 15 Pro", price: 15.5 },
+      { device_name: "iPhone 14", price: 14.2 },
+      { device_name: "Infinix Hot 50 Pro Plus", price: 11.8 },
+      { device_name: "Xiaomi Redmi 13C", price: 10.5 },
+      { device_name: "Huawei Nova 5T", price: 13.0 }
     ];
 
     for (const gp of gridPrices) {
+      // Calculate estimated savings for this specific device
+      let estimatedSavings = null;
+      try {
+        const [energyRows] = await conn.query(
+          "SELECT COALESCE(SUM(energy_wh), 0) as total_energy_wh FROM device WHERE device_name = ? AND energy_wh IS NOT NULL",
+          [gp.device_name]
+        );
+        const totalEnergyWh = energyRows?.[0]?.total_energy_wh 
+          ? Number(energyRows[0].total_energy_wh) 
+          : 0;
+        const totalEnergyKWh = totalEnergyWh / 1000; // Convert Wh to kWh
+        estimatedSavings = totalEnergyKWh * gp.price;
+      } catch (calcError) {
+        console.log(`[Seed] Could not calculate estimated savings for ${gp.device_name}:`, calcError.message);
+      }
+      
       // Use INSERT IGNORE to avoid duplicates
       await conn.query(
-        "INSERT IGNORE INTO grid_price (price, device_name) VALUES (?, ?)",
-        [gp.price, gp.device_name]
+        "INSERT IGNORE INTO grid_price (price, device_name, estimated_savings) VALUES (?, ?, ?)",
+        [gp.price, gp.device_name, estimatedSavings]
       );
     }
 
-    console.log("[Seed] ✅ Successfully inserted 5 sample grid prices");
+    console.log("[Seed] ✅ Successfully inserted 5 sample grid prices with different prices per device");
   } catch (error) {
     console.error("[Seed] ⚠️ Failed to seed sample data:", error);
     // Don't throw - seeding is optional, don't break startup

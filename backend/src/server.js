@@ -293,6 +293,80 @@ app.get("/api/devices", asyncHandler(async (req, res) => {
   }
 }, "API"));
 
+// Get device statistics for Monthly Report (last 60 days)
+// Note: Device table stores latest state per device, so we use the latest energy values
+app.get("/api/device-stats", asyncHandler(async (req, res) => {
+  try {
+    let days = req.query.days ? Number(req.query.days) : 60;
+    if (!Number.isFinite(days) || days <= 0) days = 60;
+    days = Math.min(days, 365);
+
+    // Get all devices that have been updated within the last N days
+    const [rows] = await pool.query(
+      `
+      SELECT 
+        device_name,
+        energy_wh,
+        battery_pct,
+        COALESCE(ts, created_at) AS last_update,
+        created_at,
+        UNIX_TIMESTAMP(COALESCE(ts, created_at)) AS last_update_unix,
+        UNIX_TIMESTAMP(created_at) AS created_at_unix
+      FROM device
+      WHERE COALESCE(ts, created_at) >= DATE_SUB(NOW(), INTERVAL ? DAY)
+        AND device_name IS NOT NULL
+        AND device_name != ''
+        AND energy_wh IS NOT NULL
+        AND energy_wh > 0
+      ORDER BY energy_wh DESC
+      `,
+      [days]
+    );
+
+    const stats = rows.map(row => ({
+      name: row.device_name,
+      totalEnergyWh: row.energy_wh !== null ? Number(row.energy_wh) : 0,
+      totalEnergyKWh: row.energy_wh !== null ? Number(row.energy_wh) / 1000.0 : 0,
+      avgBattery: row.battery_pct !== null ? Number(row.battery_pct) : 0,
+      sessionCount: 1, // Each device record represents one session
+      firstSeen: row.created_at_unix ? Number(row.created_at_unix) : 0,
+      lastSeen: row.last_update_unix ? Number(row.last_update_unix) : 0
+    }));
+
+    // Calculate total energy across all devices
+    const totalEnergyWh = stats.reduce((sum, stat) => sum + stat.totalEnergyWh, 0);
+    const totalEnergyKWh = totalEnergyWh / 1000.0;
+
+    // Count total days with data (based on when devices were last updated)
+    const [dayCountRows] = await pool.query(
+      `
+      SELECT COUNT(DISTINCT DATE(COALESCE(ts, created_at))) AS day_count
+      FROM device
+      WHERE COALESCE(ts, created_at) >= DATE_SUB(NOW(), INTERVAL ? DAY)
+        AND device_name IS NOT NULL
+        AND device_name != ''
+        AND energy_wh IS NOT NULL
+        AND energy_wh > 0
+      `,
+      [days]
+    );
+    const dayCount = dayCountRows[0]?.day_count ? Number(dayCountRows[0].day_count) : 0;
+    const avgPerDay = dayCount > 0 ? totalEnergyKWh / dayCount : 0;
+
+    return res.json({
+      ok: true,
+      totalEnergyKWh,
+      totalEnergyWh,
+      avgPerDay,
+      dayCount,
+      deviceStats: stats
+    });
+  } catch (error) {
+    handleDatabaseError(error, "device stats query");
+    throw error;
+  }
+}, "API"));
+
 // Grid price endpoints: save and retrieve grid price
 app.post("/api/grid-price", asyncHandler(async (req, res) => {
   const { price, device_name } = req.body;
@@ -321,13 +395,46 @@ app.post("/api/grid-price", asyncHandler(async (req, res) => {
   }
   
   try {
-    // Insert new grid price record (with optional device_name)
+    // Calculate total energy from device table to estimate savings
+    // If device_name is provided, calculate savings for that device only
+    // Otherwise, calculate savings for all devices
+    let estimatedSavings = null;
+    try {
+      let query, params;
+      if (deviceName) {
+        // Calculate savings for specific device
+        query = "SELECT COALESCE(SUM(energy_wh), 0) as total_energy_wh FROM device WHERE device_name = ? AND energy_wh IS NOT NULL";
+        params = [deviceName];
+      } else {
+        // Calculate savings for all devices
+        query = "SELECT COALESCE(SUM(energy_wh), 0) as total_energy_wh FROM device WHERE energy_wh IS NOT NULL";
+        params = [];
+      }
+      
+      const [energyRows] = await pool.query(query, params);
+      const totalEnergyWh = energyRows?.[0]?.total_energy_wh 
+        ? Number(energyRows[0].total_energy_wh) 
+        : 0;
+      const totalEnergyKWh = totalEnergyWh / 1000; // Convert Wh to kWh
+      estimatedSavings = totalEnergyKWh * priceNum;
+    } catch (calcError) {
+      console.log("[Grid Price] Could not calculate estimated savings:", calcError.message);
+      // Continue without estimated savings if calculation fails
+    }
+    
+    // Insert new grid price record (with optional device_name and estimated_savings)
     const [result] = await pool.query(
-      "INSERT INTO grid_price (price, device_name) VALUES (?, ?)",
-      [priceNum, deviceName]
+      "INSERT INTO grid_price (price, device_name, estimated_savings) VALUES (?, ?, ?)",
+      [priceNum, deviceName, estimatedSavings]
     );
     
-    return res.json({ ok: true, id: result.insertId, price: priceNum, device_name: deviceName });
+    return res.json({ 
+      ok: true, 
+      id: result.insertId, 
+      price: priceNum, 
+      device_name: deviceName,
+      estimated_savings: estimatedSavings !== null ? Number(estimatedSavings.toFixed(2)) : null
+    });
   } catch (error) {
     handleDatabaseError(error, "grid_price insert");
     throw error;
@@ -341,11 +448,11 @@ app.get("/api/grid-price", asyncHandler(async (req, res) => {
     let query, params;
     if (device_name && typeof device_name === "string" && device_name.trim().length > 0) {
       // Get grid price for specific device
-      query = "SELECT price, device_name FROM grid_price WHERE device_name = ? ORDER BY updated_at DESC, id DESC LIMIT 1";
+      query = "SELECT price, device_name, estimated_savings FROM grid_price WHERE device_name = ? ORDER BY updated_at DESC, id DESC LIMIT 1";
       params = [device_name.trim()];
     } else {
       // Get most recent grid price (global or any device)
-      query = "SELECT price, device_name FROM grid_price ORDER BY updated_at DESC, id DESC LIMIT 1";
+      query = "SELECT price, device_name, estimated_savings FROM grid_price ORDER BY updated_at DESC, id DESC LIMIT 1";
       params = [];
     }
     
@@ -354,8 +461,11 @@ app.get("/api/grid-price", asyncHandler(async (req, res) => {
       ? Number(rows[0].price) 
       : null;
     const deviceName = rows?.[0]?.device_name || null;
+    const estimatedSavings = rows?.[0]?.estimated_savings !== null && rows?.[0]?.estimated_savings !== undefined
+      ? Number(rows[0].estimated_savings)
+      : null;
     
-    return res.json({ ok: true, price, device_name: deviceName });
+    return res.json({ ok: true, price, device_name: deviceName, estimated_savings: estimatedSavings });
   } catch (error) {
     handleDatabaseError(error, "grid_price query");
     throw error;
