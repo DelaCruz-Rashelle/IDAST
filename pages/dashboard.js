@@ -876,7 +876,6 @@ export default function Home() {
                         <th>Device Name</th>
                         <th>Estimated Savings (₱)</th>
                         <th>Created At</th>
-                        <th>Updated At</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -899,23 +898,11 @@ export default function Home() {
                                   })
                                 : "—"}
                             </td>
-                            <td className="mono">
-                              {price.updated_at 
-                                ? new Date(price.updated_at).toLocaleString("en-US", { 
-                                    year: "numeric", 
-                                    month: "short", 
-                                    day: "numeric", 
-                                    hour: "2-digit", 
-                                    minute: "2-digit",
-                                    second: "2-digit"
-                                  })
-                                : "—"}
-                            </td>
                           </tr>
                         ))
                       ) : (
                         <tr>
-                          <td colSpan="6" style={{ textAlign: "center", color: "var(--muted)", padding: "20px" }}>
+                          <td colSpan="5" style={{ textAlign: "center", color: "var(--muted)", padding: "20px" }}>
                             No grid price history available
                           </td>
                         </tr>

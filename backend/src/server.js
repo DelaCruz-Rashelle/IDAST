@@ -561,8 +561,7 @@ app.get("/api/history-logs", asyncHandler(async (req, res) => {
         energy_wh,
         battery_pct,
         ts,
-        updated_at,
-        created_at
+        updated_at
        FROM device_state 
        ORDER BY updated_at DESC, id DESC 
        LIMIT ?`,
