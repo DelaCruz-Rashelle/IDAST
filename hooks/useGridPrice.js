@@ -69,7 +69,7 @@ export function useGridPrice(sendControl, setError) {
   };
 
   // Save grid price to database
-  const saveGridPrice = async (price, deviceName = null) => {
+  const saveGridPrice = async (price) => {
     if (!RAILWAY_API_BASE_URL) {
       throw new Error("Backend API not configured");
     }
@@ -79,15 +79,10 @@ export function useGridPrice(sendControl, setError) {
         ? RAILWAY_API_BASE_URL.slice(0, -1)
         : RAILWAY_API_BASE_URL;
       
-      const requestBody = { price: parseFloat(price) };
-      if (deviceName && deviceName.trim().length > 0 && deviceName !== "Unknown") {
-        requestBody.device_name = deviceName.trim();
-      }
-      
       const res = await fetch(`${base}/api/grid-price`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(requestBody)
+        body: JSON.stringify({ price: parseFloat(price) })
       });
       
       if (!res.ok) {
@@ -119,7 +114,7 @@ export function useGridPrice(sendControl, setError) {
   };
 
   // Handle grid price save
-  const handleSaveGridPrice = async (deviceName = null) => {
+  const handleSaveGridPrice = async () => {
     try {
       const price = parseFloat(gridPrice);
       if (isNaN(price) || price <= 0 || price >= 1000) {
@@ -137,7 +132,7 @@ export function useGridPrice(sendControl, setError) {
       }
       
       // Save to database and get response with estimated_savings
-      const response = await saveGridPrice(price, deviceName);
+      const response = await saveGridPrice(price);
       
       // Update saved price for calculations
       setSavedGridPrice(price);

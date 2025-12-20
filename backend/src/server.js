@@ -443,7 +443,7 @@ app.get("/api/device-stats", asyncHandler(async (req, res) => {
 
 // Grid price endpoints: save and retrieve grid price
 app.post("/api/grid-price", asyncHandler(async (req, res) => {
-  const { price, device_name } = req.body;
+  const { price } = req.body;
   
   if (price === undefined || price === null) {
     const error = new Error("price is required");
@@ -457,35 +457,15 @@ app.post("/api/grid-price", asyncHandler(async (req, res) => {
     error.statusCode = 400;
     throw error;
   }
-
-  // Validate device_name if provided
-  const deviceName = device_name && typeof device_name === "string" 
-    ? device_name.trim() 
-    : null;
-  if (deviceName && deviceName.length > 64) {
-    const error = new Error("device_name must be 64 characters or less");
-    error.statusCode = 400;
-    throw error;
-  }
   
+  try {
+    // Calculate total energy from device_state table to estimate savings
+    // Calculate savings for all devices (device-independent)
+    let estimatedSavings = null;
     try {
-      // Calculate total energy from device_state table to estimate savings
-      // If device_name is provided, calculate savings for that device only
-      // Otherwise, calculate savings for all devices
-      let estimatedSavings = null;
-      try {
-        let query, params;
-        if (deviceName) {
-          // Calculate savings for specific device
-          query = "SELECT COALESCE(SUM(energy_wh), 0) as total_energy_wh FROM device_state WHERE device_name = ? AND energy_wh IS NOT NULL";
-          params = [deviceName];
-        } else {
-          // Calculate savings for all devices
-          query = "SELECT COALESCE(SUM(energy_wh), 0) as total_energy_wh FROM device_state WHERE energy_wh IS NOT NULL";
-          params = [];
-        }
-      
-      const [energyRows] = await pool.query(query, params);
+      const [energyRows] = await pool.query(
+        "SELECT COALESCE(SUM(energy_wh), 0) as total_energy_wh FROM device_state WHERE energy_wh IS NOT NULL"
+      );
       const totalEnergyWh = energyRows?.[0]?.total_energy_wh 
         ? Number(energyRows[0].total_energy_wh) 
         : 0;
@@ -496,17 +476,16 @@ app.post("/api/grid-price", asyncHandler(async (req, res) => {
       // Continue without estimated savings if calculation fails
     }
     
-    // Insert new grid price record (with optional device_name and estimated_savings)
+    // Insert new grid price record (device-independent)
     const [result] = await pool.query(
-      "INSERT INTO grid_price (price, device_name, estimated_savings) VALUES (?, ?, ?)",
-      [priceNum, deviceName, estimatedSavings]
+      "INSERT INTO grid_price (price, estimated_savings) VALUES (?, ?)",
+      [priceNum, estimatedSavings]
     );
     
     return res.json({ 
       ok: true, 
       id: result.insertId, 
       price: priceNum, 
-      device_name: deviceName,
       estimated_savings: estimatedSavings !== null ? Number(estimatedSavings.toFixed(2)) : null
     });
   } catch (error) {
@@ -517,29 +496,18 @@ app.post("/api/grid-price", asyncHandler(async (req, res) => {
 
 app.get("/api/grid-price", asyncHandler(async (req, res) => {
   try {
-    const device_name = req.query.device_name;
-    
-    let query, params;
-    if (device_name && typeof device_name === "string" && device_name.trim().length > 0) {
-      // Get grid price for specific device
-      query = "SELECT price, device_name, estimated_savings FROM grid_price WHERE device_name = ? ORDER BY updated_at DESC, id DESC LIMIT 1";
-      params = [device_name.trim()];
-    } else {
-      // Get most recent grid price (global or any device)
-      query = "SELECT price, device_name, estimated_savings FROM grid_price ORDER BY updated_at DESC, id DESC LIMIT 1";
-      params = [];
-    }
-    
-    const [rows] = await pool.query(query, params);
+    // Get most recent grid price (device-independent)
+    const [rows] = await pool.query(
+      "SELECT price, estimated_savings FROM grid_price ORDER BY updated_at DESC, id DESC LIMIT 1"
+    );
     const price = rows?.[0]?.price !== null && rows?.[0]?.price !== undefined 
       ? Number(rows[0].price) 
       : null;
-    const deviceName = rows?.[0]?.device_name || null;
     const estimatedSavings = rows?.[0]?.estimated_savings !== null && rows?.[0]?.estimated_savings !== undefined
       ? Number(rows[0].estimated_savings)
       : null;
     
-    return res.json({ ok: true, price, device_name: deviceName, estimated_savings: estimatedSavings });
+    return res.json({ ok: true, price, estimated_savings: estimatedSavings });
   } catch (error) {
     handleDatabaseError(error, "grid_price query");
     throw error;
@@ -573,7 +541,6 @@ app.get("/api/history-logs", asyncHandler(async (req, res) => {
       `SELECT 
         id,
         price,
-        device_name,
         estimated_savings,
         created_at,
         updated_at

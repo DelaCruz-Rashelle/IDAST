@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, useState } from "react";
 import { useRouter } from "next/router";
 import Head from "next/head";
 import { handleControlError } from "../utils/errorHandler.js";
@@ -13,6 +13,7 @@ const MQTT_BROKER_URL = process.env.NEXT_PUBLIC_MQTT_BROKER_URL || "";
 
 export default function Home() {
   const router = useRouter();
+  const [startChargingLoading, setStartChargingLoading] = useState(false);
 
   const REPORT_END = new Date();
   const REPORT_START = new Date(REPORT_END.getTime() - 60 * 24 * 3600 * 1000);
@@ -475,6 +476,7 @@ export default function Home() {
                 <button
                   className="manual-btn full-width mt-8"
                   onClick={async () => {
+                    setStartChargingLoading(true);
                     try {
                       // Save device name to database if it's been entered
                       if (deviceName && deviceName.trim().length > 0 && deviceName.trim().length <= 24) {
@@ -491,11 +493,17 @@ export default function Home() {
                       mqtt.setError("");
                     } catch (error) {
                       handleControlError(error, mqtt.setError, "start charging");
+                    } finally {
+                      setStartChargingLoading(false);
                     }
                   }}
-                  disabled={!mqtt.mqttConnected || !mqtt.deviceId}
+                  disabled={!mqtt.mqttConnected || !mqtt.deviceId || startChargingLoading}
                 >
-                  {mqtt.chargingStarted ? "Charging Started ✓" : "Start Charging"}
+                  {startChargingLoading 
+                    ? "Starting..." 
+                    : mqtt.chargingStarted 
+                      ? "Charging Started ✓" 
+                      : "Start Charging"}
                 </button>
               </div>
             </div>
@@ -531,7 +539,7 @@ export default function Home() {
                       }}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
-                          gridPrice.handleSaveGridPrice(currentDevice && currentDevice !== "Unknown" ? currentDevice : null);
+                          gridPrice.handleSaveGridPrice();
                         }
                       }}
                       placeholder="Enter price (e.g., 20.00)"
@@ -542,7 +550,7 @@ export default function Home() {
                     />
                     <button
                       className="manual-btn"
-                      onClick={() => gridPrice.handleSaveGridPrice(currentDevice && currentDevice !== "Unknown" ? currentDevice : null)}
+                      onClick={gridPrice.handleSaveGridPrice}
                       disabled={!gridPrice.gridPrice || isNaN(parseFloat(gridPrice.gridPrice)) || parseFloat(gridPrice.gridPrice) <= 0 || parseFloat(gridPrice.gridPrice) >= 1000}
                       style={{ whiteSpace: "nowrap" }}
                     >
@@ -873,7 +881,6 @@ export default function Home() {
                       <tr>
                         <th>ID</th>
                         <th>Price (cents/kWh)</th>
-                        <th>Device Name</th>
                         <th>Estimated Savings (₱)</th>
                         <th>Created At</th>
                       </tr>
@@ -884,7 +891,6 @@ export default function Home() {
                           <tr key={price.id}>
                             <td>{price.id}</td>
                             <td>{Number(price.price).toFixed(2)}</td>
-                            <td>{price.device_name || "—"}</td>
                             <td>{price.estimated_savings !== null && price.estimated_savings !== undefined ? `₱${Number(price.estimated_savings).toFixed(2)}` : "—"}</td>
                             <td className="mono">
                               {price.created_at 
@@ -902,7 +908,7 @@ export default function Home() {
                         ))
                       ) : (
                         <tr>
-                          <td colSpan="5" style={{ textAlign: "center", color: "var(--muted)", padding: "20px" }}>
+                          <td colSpan="4" style={{ textAlign: "center", color: "var(--muted)", padding: "20px" }}>
                             No grid price history available
                           </td>
                         </tr>

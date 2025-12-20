@@ -69,12 +69,23 @@ export function useHistoryData(onHistoryLoaded) {
 
       // If Railway API is not configured, show error
       const errorMsg = "Backend API not configured. Please set NEXT_PUBLIC_RAILWAY_API_BASE_URL environment variable.";
-      handleApiError(new Error(errorMsg), setHistoryError, "load history");
+      setHistoryError(errorMsg);
       console.error("Railway API base URL not configured");
       
     } catch (e) {
-      const errorMsg = e.message || String(e);
-      handleApiError(new Error(errorMsg), setHistoryError, "fetch history");
+      // Handle network errors and other exceptions
+      let errorMsg = e.message || String(e);
+      
+      // If it's a network error, provide a more user-friendly message
+      if (errorMsg.includes("Failed to fetch") || errorMsg.includes("NetworkError") || errorMsg.includes("fetch")) {
+        if (!RAILWAY_API_BASE_URL) {
+          errorMsg = "Backend API not configured. Please set NEXT_PUBLIC_RAILWAY_API_BASE_URL environment variable.";
+        } else {
+          errorMsg = `Unable to connect to backend API. Please check if the server is running and accessible at ${RAILWAY_API_BASE_URL}`;
+        }
+      }
+      
+      setHistoryError(errorMsg);
       console.error("History fetch error:", e);
       console.error("Failed URL:", fetchUrl);
     } finally {

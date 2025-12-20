@@ -22,14 +22,12 @@ CREATE TABLE IF NOT EXISTS device (
   INDEX idx_device_name (device_name)
 );
 
--- Grid price table: stores Batelec grid price from user input (with device connection)
+-- Grid price table: stores Batelec grid price from user input (device-independent)
 CREATE TABLE IF NOT EXISTS grid_price (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   price DECIMAL(10,2) NOT NULL,
-  device_name VARCHAR(64) NULL,
   estimated_savings DECIMAL(12,2) NULL,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-  INDEX idx_updated_at (updated_at),
-  INDEX idx_device_name (device_name)
+  INDEX idx_updated_at (updated_at)
 );

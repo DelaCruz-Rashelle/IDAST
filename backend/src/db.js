@@ -168,42 +168,49 @@ export async function initSchema() {
       console.log("[Migration] Note: Migration skipped (may already be complete):", migrationError.message);
     }
 
-    // Create grid_price table (with device connection)
+    // Create grid_price table (device-independent)
     const gridPriceSql = `CREATE TABLE IF NOT EXISTS grid_price (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   price DECIMAL(10,2) NOT NULL,
-  device_name VARCHAR(64) NULL,
   estimated_savings DECIMAL(12,2) NULL,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-  INDEX idx_updated_at (updated_at),
-  INDEX idx_device_name (device_name)
+  INDEX idx_updated_at (updated_at)
 )`;
     await conn.query(gridPriceSql);
     console.log("Database schema initialized (grid_price table ready)");
 
-    // Migration: Add device_name column if it doesn't exist (for existing databases)
+    // Migration: Remove device_name column if it exists (for existing databases)
     try {
       const [columns] = await conn.query(
         "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'grid_price'"
       );
       const existingColumns = columns.map(c => c.COLUMN_NAME);
       
-      if (!existingColumns.includes('device_name')) {
-        console.log("[Migration] Adding device_name column to grid_price table...");
-        await conn.query("ALTER TABLE grid_price ADD COLUMN device_name VARCHAR(64) NULL AFTER price");
-        await conn.query("ALTER TABLE grid_price ADD INDEX idx_device_name (device_name)");
-        console.log("[Migration] ✅ device_name column added to grid_price table");
+      // Remove device_name column and index if they exist
+      if (existingColumns.includes('device_name')) {
+        console.log("[Migration] Removing device_name column from grid_price table...");
+        // Drop index first if it exists
+        try {
+          await conn.query("ALTER TABLE grid_price DROP INDEX idx_device_name");
+        } catch (idxError) {
+          // Index might not exist, that's okay
+          console.log("[Migration] Note: idx_device_name index not found (may already be removed)");
+        }
+        // Drop column
+        await conn.query("ALTER TABLE grid_price DROP COLUMN device_name");
+        console.log("[Migration] ✅ device_name column removed from grid_price table");
       }
       
+      // Add estimated_savings column if it doesn't exist
       if (!existingColumns.includes('estimated_savings')) {
         console.log("[Migration] Adding estimated_savings column to grid_price table...");
-        await conn.query("ALTER TABLE grid_price ADD COLUMN estimated_savings DECIMAL(12,2) NULL AFTER device_name");
+        await conn.query("ALTER TABLE grid_price ADD COLUMN estimated_savings DECIMAL(12,2) NULL AFTER price");
         console.log("[Migration] ✅ estimated_savings column added to grid_price table");
       }
     } catch (migrationError) {
       // Migration errors are non-fatal - table might not exist yet or column might already exist
-      console.log("[Migration] Note: grid_price table migration skipped (may already exist)");
+      console.log("[Migration] Note: grid_price table migration skipped (may already exist):", migrationError.message);
     }
   } catch (error) {
     handleDatabaseError(error, "schema initialization");

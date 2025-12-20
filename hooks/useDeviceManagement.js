@@ -113,7 +113,9 @@ export function useDeviceManagement(data, sendControl) {
     }
 
     // Get current telemetry values
-    const energyWh = data.energyWh !== undefined && data.energyWh !== null ? data.energyWh : null;
+    // MQTT data uses energyKWh (kWh), but backend expects energy_wh (Wh), so convert
+    const energyKWh = data.energyKWh !== undefined && data.energyKWh !== null ? data.energyKWh : null;
+    const energyWh = energyKWh !== null ? energyKWh * 1000 : null; // Convert kWh to Wh
     const batteryPct = data.batteryPct !== undefined && data.batteryPct !== null ? data.batteryPct : null;
 
     if (energyWh === null && batteryPct === null) {
@@ -139,15 +141,31 @@ export function useDeviceManagement(data, sendControl) {
 
       if (!res.ok) {
         const errorText = await res.text();
-        throw new Error(`Failed to save device state: ${res.status} ${res.statusText} - ${errorText}`);
+        let errorMsg = `Failed to save device state: ${res.status} ${res.statusText}`;
+        try {
+          const errorJson = JSON.parse(errorText);
+          if (errorJson.error) {
+            errorMsg = errorJson.error;
+          }
+        } catch (e) {
+          if (errorText && errorText.trim()) {
+            errorMsg = errorText.substring(0, 200);
+          }
+        }
+        throw new Error(errorMsg);
       }
 
-      setSaveStateStatus({ loading: false, success: true, error: null });
-      
-      // Clear success message after 3 seconds
-      setTimeout(() => {
-        setSaveStateStatus({ loading: false, success: false, error: null });
-      }, 3000);
+      const responseData = await res.json();
+      if (responseData.ok) {
+        setSaveStateStatus({ loading: false, success: true, error: null });
+        
+        // Clear success message after 3 seconds
+        setTimeout(() => {
+          setSaveStateStatus({ loading: false, success: false, error: null });
+        }, 3000);
+      } else {
+        throw new Error(responseData.error || "Failed to save device state");
+      }
     } catch (e) {
       console.error("Failed to save device state:", e);
       setSaveStateStatus({ loading: false, success: false, error: e.message || "Failed to save device state" });
