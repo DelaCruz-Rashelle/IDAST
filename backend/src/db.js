@@ -62,16 +62,67 @@ export async function initSchema() {
 
     // Create device_state table (MQTT/manual-managed telemetry)
     const stateSql = `CREATE TABLE IF NOT EXISTS device_state (
-  device_name VARCHAR(64) NOT NULL PRIMARY KEY,
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  device_name VARCHAR(64) NOT NULL UNIQUE,
   energy_wh DECIMAL(12,3) NULL,
   battery_pct DECIMAL(5,1) NULL,
   ts TIMESTAMP(3) NULL,
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   FOREIGN KEY (device_name) REFERENCES device_registration(device_name) ON DELETE CASCADE,
+  INDEX idx_device_name (device_name),
   INDEX idx_ts (ts)
 )`;
     await conn.query(stateSql);
     console.log("Database schema initialized (device_state table ready)");
+
+    // Migration: Add id column to device_state if it doesn't exist
+    try {
+      const [columns] = await conn.query(
+        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device_state'"
+      );
+      const existingColumns = columns.map(c => c.COLUMN_NAME);
+      
+      if (!existingColumns.includes('id')) {
+        console.log("[Migration] Adding id column to device_state table...");
+        
+        // Check if device_name is currently the primary key
+        const [pkInfo] = await conn.query(
+          "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device_state' AND CONSTRAINT_NAME = 'PRIMARY'"
+        );
+        const isDeviceNamePK = pkInfo.length > 0 && pkInfo[0].COLUMN_NAME === 'device_name';
+        
+        if (isDeviceNamePK) {
+          // Drop primary key constraint on device_name
+          await conn.query("ALTER TABLE device_state DROP PRIMARY KEY");
+        }
+        
+        // Add id column as first column with auto-increment
+        await conn.query("ALTER TABLE device_state ADD COLUMN id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT FIRST");
+        
+        // Set id as primary key
+        await conn.query("ALTER TABLE device_state ADD PRIMARY KEY (id)");
+        
+        // Ensure device_name has unique constraint
+        const [uniqueConstraints] = await conn.query(
+          "SELECT CONSTRAINT_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device_state' AND CONSTRAINT_TYPE = 'UNIQUE' AND CONSTRAINT_NAME LIKE '%device_name%'"
+        );
+        if (uniqueConstraints.length === 0) {
+          await conn.query("ALTER TABLE device_state ADD UNIQUE KEY uk_device_name (device_name)");
+        }
+        
+        // Add index if it doesn't exist
+        const [indexes] = await conn.query(
+          "SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device_state' AND INDEX_NAME = 'idx_device_name'"
+        );
+        if (indexes.length === 0) {
+          await conn.query("ALTER TABLE device_state ADD INDEX idx_device_name (device_name)");
+        }
+        
+        console.log("[Migration] ✅ id column added to device_state table");
+      }
+    } catch (migrationError) {
+      console.log("[Migration] Note: device_state id column migration skipped:", migrationError.message);
+    }
 
     // Migration: Migrate data from old device table to new tables
     try {
@@ -240,40 +291,7 @@ export async function seedSampleDevices() {
 
     console.log("[Seed] ✅ Successfully registered 5 sample devices with energy, battery, and timestamp data");
 
-    // Insert sample grid prices for each device (with different prices per device)
-    const gridPrices = [
-      { device_name: "iPhone 15 Pro", price: 15.5 },
-      { device_name: "iPhone 14", price: 14.2 },
-      { device_name: "Infinix Hot 50 Pro Plus", price: 11.8 },
-      { device_name: "Xiaomi Redmi 13C", price: 10.5 },
-      { device_name: "Huawei Nova 5T", price: 13.0 }
-    ];
-
-    for (const gp of gridPrices) {
-      // Calculate estimated savings from device_state
-      let estimatedSavings = null;
-      try {
-        const [energyRows] = await conn.query(
-          "SELECT COALESCE(SUM(energy_wh), 0) as total_energy_wh FROM device_state WHERE device_name = ? AND energy_wh IS NOT NULL",
-          [gp.device_name]
-        );
-        const totalEnergyWh = energyRows?.[0]?.total_energy_wh 
-          ? Number(energyRows[0].total_energy_wh) 
-          : 0;
-        const totalEnergyKWh = totalEnergyWh / 1000; // Convert Wh to kWh
-        estimatedSavings = totalEnergyKWh * gp.price;
-      } catch (calcError) {
-        console.log(`[Seed] Could not calculate estimated savings for ${gp.device_name}:`, calcError.message);
-      }
-      
-      // Use INSERT IGNORE to avoid duplicates
-      await conn.query(
-        "INSERT IGNORE INTO grid_price (price, device_name, estimated_savings) VALUES (?, ?, ?)",
-        [gp.price, gp.device_name, estimatedSavings]
-      );
-    }
-
-    console.log("[Seed] ✅ Successfully inserted 5 sample grid prices with different prices per device");
+    // Note: Grid prices are not auto-inserted - users must click "Estimate Savings" button to save grid prices
   } catch (error) {
     console.error("[Seed] ⚠️ Failed to seed sample data:", error);
     // Don't throw - seeding is optional, don't break startup

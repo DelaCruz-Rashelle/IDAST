@@ -546,6 +546,55 @@ app.get("/api/grid-price", asyncHandler(async (req, res) => {
   }
 }, "API"));
 
+// History logs endpoint: returns both device_state and grid_price history
+app.get("/api/history-logs", asyncHandler(async (req, res) => {
+  try {
+    let limit = req.query.limit ? Number(req.query.limit) : 100;
+    if (!Number.isFinite(limit) || limit <= 0) limit = 100;
+    limit = Math.min(limit, 1000); // Max 1000 records
+    
+    // Fetch device_state history
+    const [deviceStateRows] = await pool.query(
+      `SELECT 
+        id,
+        device_name,
+        energy_wh,
+        battery_pct,
+        ts,
+        updated_at,
+        created_at
+       FROM device_state 
+       ORDER BY updated_at DESC, id DESC 
+       LIMIT ?`,
+      [limit]
+    );
+    
+    // Fetch grid_price history
+    const [gridPriceRows] = await pool.query(
+      `SELECT 
+        id,
+        price,
+        device_name,
+        estimated_savings,
+        created_at,
+        updated_at
+       FROM grid_price 
+       ORDER BY updated_at DESC, id DESC 
+       LIMIT ?`,
+      [limit]
+    );
+    
+    return res.json({ 
+      ok: true, 
+      device_states: deviceStateRows || [],
+      grid_prices: gridPriceRows || []
+    });
+  } catch (error) {
+    handleDatabaseError(error, "history logs query");
+    throw error;
+  }
+}, "API"));
+
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 
 // Initialize database schema before starting server
