@@ -37,7 +37,17 @@ export function useHistoryData(onHistoryLoaded) {
           ? RAILWAY_API_BASE_URL.slice(0, -1)
           : RAILWAY_API_BASE_URL;
         fetchUrl = `${base}/api/history.csv?days=60`;
-        const res = await fetch(fetchUrl);
+        
+        // Create abort controller for timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+        
+        const res = await fetch(fetchUrl, {
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        
         if (res.ok) {
           const text = await res.text();
           setHistoryData(text);
@@ -76,8 +86,18 @@ export function useHistoryData(onHistoryLoaded) {
       // Handle network errors and other exceptions
       let errorMsg = e.message || String(e);
       
-      // If it's a network error, provide a more user-friendly message
-      if (errorMsg.includes("Failed to fetch") || errorMsg.includes("NetworkError") || errorMsg.includes("fetch")) {
+      // Handle timeout errors
+      if (e.name === 'AbortError' || e.name === 'TimeoutError') {
+        errorMsg = "Request timed out. The server may be slow or overloaded. Please try again.";
+        console.error("History fetch timeout:", e);
+      } 
+      // Handle resource limit errors
+      else if (errorMsg.includes("ERR_INSUFFICIENT_RESOURCES") || errorMsg.includes("Insufficient")) {
+        errorMsg = "Too many requests. Please wait a moment and refresh the page.";
+        console.warn("History fetch resource limit:", e);
+      }
+      // Handle other network errors
+      else if (errorMsg.includes("Failed to fetch") || errorMsg.includes("NetworkError") || errorMsg.includes("fetch")) {
         if (!RAILWAY_API_BASE_URL) {
           errorMsg = "Backend API not configured. Please set NEXT_PUBLIC_RAILWAY_API_BASE_URL environment variable.";
         } else {
@@ -172,7 +192,19 @@ export function useHistoryData(onHistoryLoaded) {
         ? RAILWAY_API_BASE_URL.slice(0, -1)
         : RAILWAY_API_BASE_URL;
       
-      const res = await fetch(`${base}/api/device-stats?days=60`);
+      const fetchUrl = `${base}/api/device-stats?days=60`;
+      console.log("[Device Stats] Fetching from:", fetchUrl);
+      
+      // Create abort controller for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+      
+      const res = await fetch(fetchUrl, {
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
       if (res.ok) {
         const json = await res.json();
         if (json.ok) {
@@ -186,7 +218,14 @@ export function useHistoryData(onHistoryLoaded) {
         console.error("[Device Stats] Failed to load:", res.status, errorText);
       }
     } catch (e) {
-      console.error("[Device Stats] Fetch error:", e);
+      // Handle timeout and network errors gracefully
+      if (e.name === 'AbortError' || e.name === 'TimeoutError') {
+        console.error("[Device Stats] Request timeout:", e);
+      } else if (e.message?.includes('ERR_INSUFFICIENT_RESOURCES')) {
+        console.warn("[Device Stats] Browser resource limit reached, will retry on next interval");
+      } else {
+        console.error("[Device Stats] Fetch error:", e);
+      }
     }
   };
 

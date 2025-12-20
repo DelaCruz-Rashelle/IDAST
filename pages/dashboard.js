@@ -128,9 +128,19 @@ export default function Home() {
   useEffect(() => {
     // Only start if authenticated
     if (typeof window !== "undefined" && sessionStorage.getItem("isAuthenticated")) {
+      // Stagger initial requests to avoid ERR_INSUFFICIENT_RESOURCES
+      // Load history first (most important)
       historyData.loadHistory();
-      historyData.loadDeviceStats(); // Load device statistics for Monthly Report
-      loadRegisteredDevices();
+      
+      // Load device stats after a short delay
+      setTimeout(() => {
+        historyData.loadDeviceStats();
+      }, 500);
+      
+      // Load registered devices after another delay
+      setTimeout(() => {
+        loadRegisteredDevices();
+      }, 1000);
       
       // Do NOT load device name or grid price from database
       // Fields should start empty on new session and only be populated by user input

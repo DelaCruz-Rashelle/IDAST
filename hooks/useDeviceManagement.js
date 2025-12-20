@@ -49,7 +49,19 @@ export function useDeviceManagement(data, sendControl) {
       const base = RAILWAY_API_BASE_URL.endsWith("/")
         ? RAILWAY_API_BASE_URL.slice(0, -1)
         : RAILWAY_API_BASE_URL;
-      const res = await fetch(`${base}/api/devices`);
+      const fetchUrl = `${base}/api/devices`;
+      console.log("[Registered Devices] Fetching from:", fetchUrl);
+      
+      // Create abort controller for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+      
+      const res = await fetch(fetchUrl, {
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
       if (res.ok) {
         const json = await res.json();
         if (json.devices && Array.isArray(json.devices)) {
@@ -62,8 +74,15 @@ export function useDeviceManagement(data, sendControl) {
         }
       }
     } catch (e) {
-      console.error("Failed to load registered devices:", e);
-      // Don't show error to user for this - it's okay if it fails
+      // Handle timeout and resource limit errors gracefully
+      if (e.name === 'AbortError' || e.name === 'TimeoutError') {
+        console.warn("[Registered Devices] Request timeout, will retry on next interval");
+      } else if (e.message?.includes('ERR_INSUFFICIENT_RESOURCES')) {
+        console.warn("[Registered Devices] Browser resource limit reached, will retry on next interval");
+      } else {
+        console.error("Failed to load registered devices:", e);
+      }
+      // Don't show error to user for this - it's okay if it fails, will retry on interval
     }
   };
 

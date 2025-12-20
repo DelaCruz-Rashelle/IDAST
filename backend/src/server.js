@@ -7,25 +7,37 @@ import { asyncHandler, createErrorResponse, handleDatabaseError } from "./errorH
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
-// CORS configuration - restrict to allowed origins only
+// CORS configuration - allow all origins by default, or restrict to ALLOWED_ORIGINS if set
 app.use((req, res, next) => {
   // Get allowed origins from environment variable (comma-separated)
-  // Default to empty array if not set (no origins allowed)
+  // If ALLOWED_ORIGINS is not set, allow all origins (*) for development/convenience
   const allowedOrigins = process.env.ALLOWED_ORIGINS
     ? process.env.ALLOWED_ORIGINS.split(",").map(origin => origin.trim())
-    : [];
+    : null; // null means allow all origins
   
   const origin = req.headers.origin;
   
-  // Allow requests with matching origin
-  if (origin && allowedOrigins.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
+  if (allowedOrigins === null) {
+    // Allow all origins (development/default behavior)
+    if (origin) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+    } else {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+    }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
     res.setHeader("Access-Control-Allow-Credentials", "true");
-  } else if (origin) {
-    // Origin not allowed - log for security monitoring
-    console.warn(`[CORS] Blocked request from unauthorized origin: ${origin}`);
+  } else {
+    // Restrict to specific origins (production/security)
+    if (origin && allowedOrigins.includes(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+    } else if (origin) {
+      // Origin not allowed - log for security monitoring
+      console.warn(`[CORS] Blocked request from unauthorized origin: ${origin}`);
+    }
   }
   
   // Handle preflight requests
@@ -80,13 +92,16 @@ app.get("/api/history.csv", asyncHandler(async (req, res) => {
   days = Math.min(days, 365);
 
   console.log(`[history.csv] Querying device history for ${days} days`);
+  console.log(`[history.csv] Request origin: ${req.headers.origin || 'none'}`);
   
   // First, verify database connection
   const conn = await pool.getConnection();
   try {
     await conn.query("SELECT 1");
+    console.log(`[history.csv] Database connection verified`);
   } catch (connErr) {
     conn.release();
+    console.error(`[history.csv] Database connection failed:`, connErr);
     handleDatabaseError(connErr, "connection check");
     throw new Error(`Database connection failed: ${connErr?.message || String(connErr)}`);
   }
@@ -125,6 +140,11 @@ app.get("/api/history.csv", asyncHandler(async (req, res) => {
     
     const lines = [];
     lines.push("timestamp,energy_wh,battery_pct,device_name,session_min");
+    
+    if (rows.length === 0) {
+      console.log(`[history.csv] No data found, returning empty CSV with headers`);
+    }
+    
     for (const r of rows) {
       const dayTs = Number(r.day_ts_s) || 0;
       const energyWh = r.total_energy_wh !== null && r.total_energy_wh !== undefined 
@@ -148,8 +168,15 @@ app.get("/api/history.csv", asyncHandler(async (req, res) => {
       lines.push(`${dayTs},${energyWh},${batt},${safeDev},${sessionMin}`);
     }
 
+    const csvContent = lines.join("\n") + "\n";
+    console.log(`[history.csv] Returning CSV with ${lines.length - 1} data rows (plus header)`);
+    
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    return res.status(200).send(lines.join("\n") + "\n");
+    res.setHeader("Access-Control-Allow-Origin", req.headers.origin || "*");
+    return res.status(200).send(csvContent);
+  } catch (error) {
+    console.error(`[history.csv] Error processing request:`, error);
+    throw error;
   } finally {
     conn.release();
   }
