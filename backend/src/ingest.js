@@ -52,27 +52,34 @@ async function handleMqttMessage(topic, message) {
       return;
     }
     
-    // Update device table with telemetry data
+    // Update device_state table with telemetry data
     await updateDeviceFromTelemetry(telemetry);
-    console.log(`✅ Device data updated from telemetry: ${telemetry.device_id || "unknown"}`);
+    console.log(`✅ Device state updated from telemetry: ${telemetry.device_id || "unknown"}`);
   } catch (err) {
     handleMqttError(err, topic, message);
   }
 }
 
 export async function updateDeviceFromTelemetry(t) {
-  // Update device table with latest telemetry data
-  // Note: Telemetry table has been removed - all data is stored in device table
+  // Update device_state table with latest telemetry data
   if (t.deviceName && (t.deviceName.trim() !== "" && t.deviceName.trim().toLowerCase() !== "unknown")) {
     const deviceName = t.deviceName.trim();
     const energyWh = toNum(t.energyWh);
     const batteryPct = toNum(t.batteryPct);
-    const timestamp = new Date(); // Use current timestamp for device table
+    const timestamp = new Date(); // Use current timestamp for device state
     
     try {
-      // Update or insert device record
+      // Ensure device is registered first (create if doesn't exist)
       await pool.execute(
-        `INSERT INTO device (device_name, energy_wh, battery_pct, ts) 
+        `INSERT INTO device_registration (device_name) 
+         VALUES (?)
+         ON DUPLICATE KEY UPDATE updated_at = CURRENT_TIMESTAMP(3)`,
+        [deviceName]
+      );
+      
+      // Update or insert device state
+      await pool.execute(
+        `INSERT INTO device_state (device_name, energy_wh, battery_pct, ts) 
          VALUES (?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE 
            energy_wh = VALUES(energy_wh),
@@ -82,7 +89,7 @@ export async function updateDeviceFromTelemetry(t) {
         [deviceName, energyWh, batteryPct, timestamp]
       );
     } catch (error) {
-      handleDatabaseError(error, "update device from telemetry");
+      handleDatabaseError(error, "update device state from telemetry");
       throw error; // Re-throw to allow caller to handle
     }
   }

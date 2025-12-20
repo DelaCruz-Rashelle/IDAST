@@ -49,85 +49,72 @@ export async function dbPing() {
 export async function initSchema() {
   const conn = await pool.getConnection();
   try {
-    // Create device table (with all device-related display data)
-    const deviceSql = `CREATE TABLE IF NOT EXISTS device (
+    // Create device_registration table (dashboard-managed metadata)
+    const registrationSql = `CREATE TABLE IF NOT EXISTS device_registration (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   device_name VARCHAR(64) NOT NULL UNIQUE,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_device_name (device_name)
+)`;
+    await conn.query(registrationSql);
+    console.log("Database schema initialized (device_registration table ready)");
+
+    // Create device_state table (MQTT/manual-managed telemetry)
+    const stateSql = `CREATE TABLE IF NOT EXISTS device_state (
+  device_name VARCHAR(64) NOT NULL PRIMARY KEY,
   energy_wh DECIMAL(12,3) NULL,
   battery_pct DECIMAL(5,1) NULL,
   ts TIMESTAMP(3) NULL,
-  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-  INDEX idx_updated_at (updated_at),
-  INDEX idx_ts (ts),
-  INDEX idx_device_name (device_name)
+  FOREIGN KEY (device_name) REFERENCES device_registration(device_name) ON DELETE CASCADE,
+  INDEX idx_ts (ts)
 )`;
-    await conn.query(deviceSql);
-    console.log("Database schema initialized (device table ready)");
+    await conn.query(stateSql);
+    console.log("Database schema initialized (device_state table ready)");
 
-    // Migration: Add new columns if they don't exist (for existing databases)
+    // Migration: Migrate data from old device table to new tables
     try {
-      const [columns] = await conn.query(
-        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device'"
+      const [tables] = await conn.query(
+        "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device'"
       );
-      const existingColumns = columns.map(c => c.COLUMN_NAME);
       
-      if (!existingColumns.includes('energy_wh')) {
-        console.log("[Migration] Adding energy_wh column to device table...");
-        await conn.query("ALTER TABLE device ADD COLUMN energy_wh DECIMAL(12,3) NULL AFTER device_name");
-        console.log("[Migration] ✅ energy_wh column added");
-      }
-      
-      if (!existingColumns.includes('battery_pct')) {
-        console.log("[Migration] Adding battery_pct column to device table...");
-        await conn.query("ALTER TABLE device ADD COLUMN battery_pct DECIMAL(5,1) NULL AFTER energy_wh");
-        console.log("[Migration] ✅ battery_pct column added");
-      }
-      
-      if (!existingColumns.includes('ts')) {
-        console.log("[Migration] Adding ts column to device table...");
-        await conn.query("ALTER TABLE device ADD COLUMN ts TIMESTAMP(3) NULL AFTER battery_pct");
-        await conn.query("ALTER TABLE device ADD INDEX idx_ts (ts)");
-        console.log("[Migration] ✅ ts column added");
-      }
-
-      // Update device_name length if needed
-      const [deviceNameCol] = await conn.query(
-        "SELECT CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device' AND COLUMN_NAME = 'device_name'"
-      );
-      if (deviceNameCol.length > 0 && deviceNameCol[0].CHARACTER_MAXIMUM_LENGTH < 64) {
-        console.log("[Migration] Expanding device_name column length...");
-        await conn.query("ALTER TABLE device MODIFY COLUMN device_name VARCHAR(64) NOT NULL");
-        console.log("[Migration] ✅ device_name column expanded");
-      }
-
-      // Add unique constraint on device_name if it doesn't exist
-      const [constraints] = await conn.query(
-        "SELECT CONSTRAINT_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device' AND CONSTRAINT_TYPE = 'UNIQUE' AND CONSTRAINT_NAME LIKE '%device_name%'"
-      );
-      if (constraints.length === 0) {
-        console.log("[Migration] Adding unique constraint on device_name...");
-        // First, remove duplicates if any exist
-        await conn.query(`
-          DELETE d1 FROM device d1
-          INNER JOIN device d2 
-          WHERE d1.id > d2.id AND d1.device_name = d2.device_name
-        `);
-        await conn.query("ALTER TABLE device ADD UNIQUE KEY uk_device_name (device_name)");
-        console.log("[Migration] ✅ unique constraint on device_name added");
-      }
-
-      // Add index for device_name if it doesn't exist (separate from unique constraint)
-      const [indexes] = await conn.query(
-        "SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device' AND INDEX_NAME = 'idx_device_name'"
-      );
-      if (indexes.length === 0) {
-        console.log("[Migration] Adding idx_device_name index...");
-        await conn.query("ALTER TABLE device ADD INDEX idx_device_name (device_name)");
-        console.log("[Migration] ✅ idx_device_name index added");
+      if (tables.length > 0) {
+        console.log("[Migration] Migrating data from device table to device_registration and device_state...");
+        
+        // Check if migration already done
+        const [regCount] = await conn.query("SELECT COUNT(*) as count FROM device_registration");
+        if (regCount[0].count === 0) {
+          // Migrate device names to device_registration
+          await conn.query(`
+            INSERT INTO device_registration (device_name, created_at, updated_at)
+            SELECT DISTINCT device_name, created_at, updated_at
+            FROM device
+            WHERE device_name IS NOT NULL AND device_name != ''
+            ON DUPLICATE KEY UPDATE 
+              updated_at = GREATEST(device_registration.updated_at, device.updated_at)
+          `);
+          console.log("[Migration] ✅ Migrated device names to device_registration");
+          
+          // Migrate telemetry data to device_state
+          await conn.query(`
+            INSERT INTO device_state (device_name, energy_wh, battery_pct, ts, updated_at)
+            SELECT device_name, energy_wh, battery_pct, ts, updated_at
+            FROM device
+            WHERE device_name IS NOT NULL AND device_name != ''
+            ON DUPLICATE KEY UPDATE
+              energy_wh = COALESCE(device.energy_wh, device_state.energy_wh),
+              battery_pct = COALESCE(device.battery_pct, device_state.battery_pct),
+              ts = COALESCE(device.ts, device_state.ts),
+              updated_at = GREATEST(device_state.updated_at, device.updated_at)
+          `);
+          console.log("[Migration] ✅ Migrated telemetry data to device_state");
+        } else {
+          console.log("[Migration] Migration already completed, skipping");
+        }
       }
     } catch (migrationError) {
-      console.log("[Migration] Note: Device table migration skipped (may already be up to date)");
+      console.log("[Migration] Note: Migration skipped (may already be complete):", migrationError.message);
     }
 
     // Create grid_price table (with device connection)
@@ -179,14 +166,14 @@ export async function initSchema() {
 export async function seedSampleDevices() {
   const conn = await pool.getConnection();
   try {
-    // Check if device table already has data
-    const [existingRows] = await conn.query("SELECT COUNT(*) as count FROM device");
+    // Check if device_registration table already has data
+    const [existingRows] = await conn.query("SELECT COUNT(*) as count FROM device_registration");
     const existingCount = existingRows[0]?.count || 0;
     
     // Only seed if table is empty (or if explicitly enabled via env var)
     const forceSeed = process.env.SEED_SAMPLE_DATA === "true";
     if (existingCount > 0 && !forceSeed) {
-      console.log(`[Seed] Device table already has ${existingCount} rows, skipping sample data`);
+      console.log(`[Seed] Device registration table already has ${existingCount} rows, skipping sample data`);
       return;
     }
 
@@ -195,7 +182,7 @@ export async function seedSampleDevices() {
     // Get current time and create timestamps for the last 5 days
     const now = new Date();
 
-    // Insert device data into device table with all necessary fields
+    // Device data with both registration and state information
     const deviceData = [
       {
         device_name: "iPhone 15 Pro",
@@ -230,9 +217,17 @@ export async function seedSampleDevices() {
     ];
 
     for (const device of deviceData) {
-      // Use INSERT ... ON DUPLICATE KEY UPDATE to update existing devices or insert new ones
+      // Insert into device_registration
       await conn.query(
-        `INSERT INTO device (device_name, energy_wh, battery_pct, ts) 
+        `INSERT INTO device_registration (device_name) 
+         VALUES (?)
+         ON DUPLICATE KEY UPDATE updated_at = CURRENT_TIMESTAMP(3)`,
+        [device.device_name]
+      );
+      
+      // Insert into device_state
+      await conn.query(
+        `INSERT INTO device_state (device_name, energy_wh, battery_pct, ts) 
          VALUES (?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE 
            energy_wh = VALUES(energy_wh),
@@ -255,11 +250,11 @@ export async function seedSampleDevices() {
     ];
 
     for (const gp of gridPrices) {
-      // Calculate estimated savings for this specific device
+      // Calculate estimated savings from device_state
       let estimatedSavings = null;
       try {
         const [energyRows] = await conn.query(
-          "SELECT COALESCE(SUM(energy_wh), 0) as total_energy_wh FROM device WHERE device_name = ? AND energy_wh IS NOT NULL",
+          "SELECT COALESCE(SUM(energy_wh), 0) as total_energy_wh FROM device_state WHERE device_name = ? AND energy_wh IS NOT NULL",
           [gp.device_name]
         );
         const totalEnergyWh = energyRows?.[0]?.total_energy_wh 

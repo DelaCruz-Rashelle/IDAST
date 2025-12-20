@@ -27,6 +27,7 @@ export default function Home() {
   const [deviceId, setDeviceId] = useState("");
   const [chargingStarted, setChargingStarted] = useState(false);
   const [registeredDevices, setRegisteredDevices] = useState([]);
+  const [saveStateStatus, setSaveStateStatus] = useState({ loading: false, success: false, error: null });
   const deviceNameInputFocusedRef = useRef(false);
   const deviceNameDebounceRef = useRef(null);
   const deviceNameLoadedFromDbRef = useRef(false);
@@ -66,17 +67,14 @@ export default function Home() {
     }
     
     if (json.manual !== undefined) setManual(json.manual);
-    // Only update device name from telemetry if:
-    // 1. Input is not focused
-    // 2. We haven't loaded a device name from the database yet (to preserve user's saved value)
-    // 3. The telemetry value is not "Unknown" or empty
+    // Do NOT update device name input field from telemetry
+    // Only update the currentDevice display (read-only) for reference
+    // The input field should only be populated by user input, not from database or telemetry
     if (json.deviceName && 
-        !deviceNameInputFocusedRef.current && 
-        !deviceNameLoadedFromDbRef.current &&
         json.deviceName.trim() !== "" &&
         json.deviceName.trim().toLowerCase() !== "unknown") {
       setCurrentDevice(json.deviceName);
-      setDeviceName(json.deviceName);
+      // Do not update deviceName state - let user input it manually
     }
     // Never update grid price from telemetry - user must input and save manually
     // Telemetry values are ignored to prevent default values from appearing
@@ -472,6 +470,7 @@ export default function Home() {
   const loadDeviceStats = async () => {
     try {
       if (!RAILWAY_API_BASE_URL) {
+        console.log("[Device Stats] API not configured");
         return; // API not configured
       }
 
@@ -483,13 +482,17 @@ export default function Home() {
       if (res.ok) {
         const json = await res.json();
         if (json.ok) {
+          console.log("[Device Stats] Loaded:", json.deviceStats?.length || 0, "devices");
           setDeviceStatsData(json);
+        } else {
+          console.error("[Device Stats] API returned error:", json);
         }
       } else {
-        console.error("Failed to load device stats:", res.status);
+        const errorText = await res.text();
+        console.error("[Device Stats] Failed to load:", res.status, errorText);
       }
     } catch (e) {
-      console.error("Device stats fetch error:", e);
+      console.error("[Device Stats] Fetch error:", e);
     }
   };
 
@@ -528,7 +531,12 @@ export default function Home() {
       if (res.ok) {
         const json = await res.json();
         if (json.devices && Array.isArray(json.devices)) {
-          setRegisteredDevices(json.devices);
+          // Extract device_name from objects or use strings directly
+          const deviceNames = json.devices.map(device => 
+            typeof device === 'string' ? device : (device.device_name || device)
+          ).filter(name => name && name.trim() !== '');
+          console.log("[Registered Devices] Loaded:", deviceNames.length, "devices:", deviceNames);
+          setRegisteredDevices(deviceNames);
         }
       }
     } catch (e) {
@@ -636,6 +644,72 @@ export default function Home() {
     } catch (e) {
       console.error("Failed to save grid price:", e);
       throw e; // Re-throw so caller can handle error
+    }
+  };
+
+  // Save device state to database (manual save from dashboard)
+  const saveDeviceState = async () => {
+    if (!RAILWAY_API_BASE_URL) {
+      setSaveStateStatus({ loading: false, success: false, error: "API URL not configured" });
+      return;
+    }
+
+    if (!data) {
+      setSaveStateStatus({ loading: false, success: false, error: "No telemetry data available" });
+      return;
+    }
+
+    // Get device name from current state or input field
+    const currentDeviceName = deviceName.trim() || currentDevice || "Unknown";
+    if (currentDeviceName === "Unknown" || !currentDeviceName) {
+      setSaveStateStatus({ loading: false, success: false, error: "Device name is required" });
+      return;
+    }
+
+    // Get current telemetry values
+    const energyWh = data.energyWh !== undefined && data.energyWh !== null ? data.energyWh : null;
+    const batteryPct = data.batteryPct !== undefined && data.batteryPct !== null ? data.batteryPct : null;
+
+    if (energyWh === null && batteryPct === null) {
+      setSaveStateStatus({ loading: false, success: false, error: "No energy or battery data to save" });
+      return;
+    }
+
+    setSaveStateStatus({ loading: true, success: false, error: null });
+
+    try {
+      const base = RAILWAY_API_BASE_URL.endsWith("/")
+        ? RAILWAY_API_BASE_URL.slice(0, -1)
+        : RAILWAY_API_BASE_URL;
+      const res = await fetch(`${base}/api/device-state`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          device_name: currentDeviceName,
+          energy_wh: energyWh,
+          battery_pct: batteryPct
+        })
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(`Failed to save device state: ${res.status} ${res.statusText} - ${errorText}`);
+      }
+
+      setSaveStateStatus({ loading: false, success: true, error: null });
+      
+      // Clear success message after 3 seconds
+      setTimeout(() => {
+        setSaveStateStatus({ loading: false, success: false, error: null });
+      }, 3000);
+    } catch (e) {
+      console.error("Failed to save device state:", e);
+      setSaveStateStatus({ loading: false, success: false, error: e.message || "Failed to save device state" });
+      
+      // Clear error message after 5 seconds
+      setTimeout(() => {
+        setSaveStateStatus({ loading: false, success: false, error: null });
+      }, 5000);
     }
   };
 
@@ -777,30 +851,13 @@ export default function Home() {
         return;
       }
 
-      // Check if this is a page refresh or a new session
-      const isPageRefresh = sessionStorage.getItem("isPageRefresh");
-      
-      if (isPageRefresh === "true") {
-        // Page refresh: restore input values from sessionStorage
-        const savedDeviceName = sessionStorage.getItem("deviceNameInput");
-        const savedGridPrice = sessionStorage.getItem("gridPriceInput");
-        
-        if (savedDeviceName !== null) {
-          setDeviceName(savedDeviceName);
-        }
-        if (savedGridPrice !== null) {
-          setGridPrice(savedGridPrice);
-        }
-      } else {
-        // New session (tab closed/reopened or logged out): clear inputs
-        setDeviceName("");
-        setGridPrice("");
-        sessionStorage.removeItem("deviceNameInput");
-        sessionStorage.removeItem("gridPriceInput");
-      }
-      
-      // Set refresh flag for next time (if user refreshes, this will be true)
-      sessionStorage.setItem("isPageRefresh", "true");
+      // Always start with empty fields - do not restore from sessionStorage
+      // Fields should only be populated by user input, not from previous sessions
+      setDeviceName("");
+      setGridPrice("");
+      sessionStorage.removeItem("deviceNameInput");
+      sessionStorage.removeItem("gridPriceInput");
+      sessionStorage.removeItem("isPageRefresh");
     }
   }, [router]);
 
@@ -831,17 +888,9 @@ export default function Home() {
       loadDeviceStats(); // Load device statistics for Monthly Report
       loadRegisteredDevices();
       
-      // Only load from database if sessionStorage doesn't have values (new session)
+      // Do NOT load device name or grid price from database
+      // Fields should start empty on new session and only be populated by user input
       // On refresh, sessionStorage values are already restored in the auth check useEffect
-      const savedDeviceName = sessionStorage.getItem("deviceNameInput");
-      const savedGridPrice = sessionStorage.getItem("gridPriceInput");
-      
-      if (!savedDeviceName) {
-        loadDeviceName();
-      }
-      if (!savedGridPrice) {
-        loadGridPrice();
-      }
       
       const historyInterval = setInterval(loadHistory, 30000);
       const deviceStatsInterval = setInterval(loadDeviceStats, 30000); // Refresh device stats every 30 seconds
@@ -1021,10 +1070,16 @@ export default function Home() {
   const avgPerDayFromAPI = deviceStatsData?.avgPerDay || 0;
   
   // Filter device stats to registered devices only
+  // If no registered devices, show all devices with data
   const deviceStatsFromAPI = deviceStatsData?.deviceStats 
-    ? deviceStatsData.deviceStats.filter(stat => 
-        registeredDevices.length === 0 || registeredDevices.includes(stat.name)
-      )
+    ? deviceStatsData.deviceStats.filter(stat => {
+        // If no registered devices, show all devices
+        if (registeredDevices.length === 0) {
+          return true;
+        }
+        // Otherwise, only show registered devices
+        return registeredDevices.includes(stat.name);
+      })
     : [];
 
   // Use API data if available, otherwise fall back to historyData calculations
@@ -1176,6 +1231,36 @@ export default function Home() {
                     {data?.batteryPct !== undefined ? Math.round(data.batteryPct) : "--"}%
                   </div>
                 </div>
+              </div>
+              <div style={{ marginTop: "16px", marginBottom: "16px" }}>
+                <button
+                  onClick={saveDeviceState}
+                  disabled={saveStateStatus.loading || !data}
+                  style={{
+                    padding: "8px 16px",
+                    backgroundColor: saveStateStatus.loading ? "#6c757d" : (saveStateStatus.success ? "#28a745" : "#007bff"),
+                    color: "white",
+                    border: "none",
+                    borderRadius: "4px",
+                    cursor: saveStateStatus.loading || !data ? "not-allowed" : "pointer",
+                    fontSize: "14px",
+                    fontWeight: "500",
+                    opacity: saveStateStatus.loading || !data ? 0.6 : 1
+                  }}
+                  title={!data ? "No telemetry data available" : "Save current device state to database"}
+                >
+                  {saveStateStatus.loading ? "Saving..." : saveStateStatus.success ? "✓ Saved" : "Save Device State"}
+                </button>
+                {saveStateStatus.error && (
+                  <div style={{ marginTop: "8px", color: "#dc3545", fontSize: "12px" }}>
+                    {saveStateStatus.error}
+                  </div>
+                )}
+                {saveStateStatus.success && !saveStateStatus.error && (
+                  <div style={{ marginTop: "8px", color: "#28a745", fontSize: "12px" }}>
+                    Device state saved successfully
+                  </div>
+                )}
               </div>
               <div className="kpis mt-10">
                 <div className="kpi">
@@ -1499,9 +1584,31 @@ export default function Home() {
                     })
                   ) : (
                     <li className="muted" style={{ fontStyle: "italic" }}>
-                      {registeredDevices.length > 0 
-                        ? "No energy data for registered devices in the last 60 days. Start charging to track energy delivery."
-                        : "No device highlights available yet. Register a device to start tracking energy delivery."}
+                      {(() => {
+                        // Debug: log what we have
+                        if (typeof window !== "undefined" && process.env.NODE_ENV !== "production") {
+                          console.log("[Device Highlights Debug]", {
+                            deviceStatsData: deviceStatsData,
+                            deviceStatsFromAPI: deviceStatsFromAPI,
+                            deviceStatsFallback: deviceStatsFallback,
+                            deviceStats: deviceStats,
+                            registeredDevices: registeredDevices
+                          });
+                        }
+                        
+                        if (deviceStatsData && deviceStatsData.deviceStats && deviceStatsData.deviceStats.length > 0) {
+                          // We have data from API but it's being filtered out
+                          if (registeredDevices.length > 0) {
+                            return "No energy data for registered devices. Try registering the devices shown in the API response.";
+                          }
+                          return "No device highlights available. Check console for debug info.";
+                        }
+                        
+                        if (registeredDevices.length > 0) {
+                          return "No energy data for registered devices in the last 60 days. Start charging to track energy delivery.";
+                        }
+                        return "No device highlights available yet. Register a device to start tracking energy delivery.";
+                      })()}
                     </li>
                   )}
                 </ul>
