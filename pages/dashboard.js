@@ -720,7 +720,7 @@ export default function Home() {
                       <td>Estimated Savings</td>
                       <td>
                         {gridPrice.savedGridPrice !== null
-                          ? `₱${(totalEnergyKWh * gridPrice.savedGridPrice).toFixed(2)}`
+                          ? `₱${((totalEnergyKWh * gridPrice.savedGridPrice) / 100).toFixed(2)}`
                           : "— (Save grid price to calculate)"}
                       </td>
                     </tr>
@@ -889,7 +889,7 @@ export default function Home() {
                       Total Estimated Savings:
                     </div>
                     <div className="history-logs-current-savings-value">
-                      ₱{(totalEnergyKWh * gridPrice.savedGridPrice).toFixed(2)}
+                      ₱{((totalEnergyKWh * gridPrice.savedGridPrice) / 100).toFixed(2)}
                     </div>
                   </div>
                 )}

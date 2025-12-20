@@ -497,7 +497,7 @@ app.post("/api/grid-price", asyncHandler(async (req, res) => {
         ? Number(energyRows[0].total_energy_wh) 
         : 0;
       const totalEnergyKWh = totalEnergyWh / 1000; // Convert Wh to kWh
-      estimatedSavings = totalEnergyKWh * priceNum;
+      estimatedSavings = (totalEnergyKWh * priceNum) / 100; // Convert cents to pesos (priceNum is in cents/kWh)
     } catch (calcError) {
       console.log("[Grid Price] Could not calculate estimated savings:", calcError.message);
       // Continue without estimated savings if calculation fails
