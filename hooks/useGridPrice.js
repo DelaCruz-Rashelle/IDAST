@@ -69,23 +69,49 @@ export function useGridPrice(sendControl, setError) {
   };
 
   // Save grid price to database
-  const saveGridPrice = async (price) => {
-    if (!RAILWAY_API_BASE_URL) return;
+  const saveGridPrice = async (price, deviceName = null) => {
+    if (!RAILWAY_API_BASE_URL) {
+      throw new Error("Backend API not configured");
+    }
     
     try {
       const base = RAILWAY_API_BASE_URL.endsWith("/")
         ? RAILWAY_API_BASE_URL.slice(0, -1)
         : RAILWAY_API_BASE_URL;
+      
+      const requestBody = { price: parseFloat(price) };
+      if (deviceName && deviceName.trim().length > 0 && deviceName !== "Unknown") {
+        requestBody.device_name = deviceName.trim();
+      }
+      
       const res = await fetch(`${base}/api/grid-price`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ price: parseFloat(price) })
+        body: JSON.stringify(requestBody)
       });
+      
       if (!res.ok) {
-        throw new Error(`Failed to save grid price: ${res.status} ${res.statusText}`);
+        const errorText = await res.text();
+        let errorMsg = `Failed to save grid price: ${res.status} ${res.statusText}`;
+        try {
+          const errorJson = JSON.parse(errorText);
+          if (errorJson.error) {
+            errorMsg = errorJson.error;
+          }
+        } catch (e) {
+          if (errorText && errorText.trim()) {
+            errorMsg = errorText.substring(0, 200);
+          }
+        }
+        throw new Error(errorMsg);
       }
+      
+      const data = await res.json();
       // Mark that we've saved to DB, so telemetry won't overwrite it
       gridPriceLoadedFromDbRef.current = true;
+      
+      // Return the response data including estimated_savings
+      return data;
     } catch (e) {
       console.error("Failed to save grid price:", e);
       throw e; // Re-throw so caller can handle error
@@ -93,7 +119,7 @@ export function useGridPrice(sendControl, setError) {
   };
 
   // Handle grid price save
-  const handleSaveGridPrice = async () => {
+  const handleSaveGridPrice = async (deviceName = null) => {
     try {
       const price = parseFloat(gridPrice);
       if (isNaN(price) || price <= 0 || price >= 1000) {
@@ -101,10 +127,26 @@ export function useGridPrice(sendControl, setError) {
         setGridPrice("");
         return;
       }
-      await sendControl({ newPrice: price });
-      await saveGridPrice(price);
-      setSavedGridPrice(price); // Mark as saved for calculations
+      
+      // Send to MQTT if available (non-blocking)
+      try {
+        await sendControl({ newPrice: price });
+      } catch (mqttError) {
+        console.warn("MQTT send failed (non-critical):", mqttError);
+        // Continue even if MQTT fails
+      }
+      
+      // Save to database and get response with estimated_savings
+      const response = await saveGridPrice(price, deviceName);
+      
+      // Update saved price for calculations
+      setSavedGridPrice(price);
       setError("");
+      
+      // Log success with estimated savings if available
+      if (response.estimated_savings !== null && response.estimated_savings !== undefined) {
+        console.log(`Grid price saved. Estimated savings: ₱${response.estimated_savings.toFixed(2)}`);
+      }
       
       // Auto-scroll to Estimated Savings section after saving
       setTimeout(() => {

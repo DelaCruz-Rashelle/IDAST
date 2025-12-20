@@ -531,7 +531,7 @@ export default function Home() {
                       }}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
-                          gridPrice.handleSaveGridPrice();
+                          gridPrice.handleSaveGridPrice(currentDevice && currentDevice !== "Unknown" ? currentDevice : null);
                         }
                       }}
                       placeholder="Enter price (e.g., 20.00)"
@@ -542,8 +542,8 @@ export default function Home() {
                     />
                     <button
                       className="manual-btn"
-                      onClick={gridPrice.handleSaveGridPrice}
-                      disabled={!mqtt.mqttConnected || !mqtt.deviceId || !gridPrice.gridPrice || isNaN(parseFloat(gridPrice.gridPrice)) || parseFloat(gridPrice.gridPrice) <= 0 || parseFloat(gridPrice.gridPrice) >= 1000}
+                      onClick={() => gridPrice.handleSaveGridPrice(currentDevice && currentDevice !== "Unknown" ? currentDevice : null)}
+                      disabled={!gridPrice.gridPrice || isNaN(parseFloat(gridPrice.gridPrice)) || parseFloat(gridPrice.gridPrice) <= 0 || parseFloat(gridPrice.gridPrice) >= 1000}
                       style={{ whiteSpace: "nowrap" }}
                     >
                       Estimate Savings
