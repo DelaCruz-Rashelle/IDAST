@@ -67,7 +67,7 @@ const int relaxRange         = 60;
 bool steadyState = false;
 
 // === Demo Mode ===
-bool demoMode = false;  // Set to false to use real sensor data for energy calculations
+bool demoMode = false;
 int simTop = 0, simLeft = 0, simRight = 0;
 int simTiltAngle = 90;
 int simHErr = 0, simVErr = 0;
@@ -277,8 +277,15 @@ void update_energy_model(int avgLight, int horizontalError) {
 // === ESP-NOW helpers ===
 void onDataSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
   (void)info;
-  Serial.printf("📡 ESP-NOW send status: %s\n",
-                status == ESP_NOW_SEND_SUCCESS ? "SUCCESS" : "FAIL");
+  if (status == ESP_NOW_SEND_SUCCESS) {
+    Serial.printf("📡 ESP-NOW send status: SUCCESS\n");
+  } else {
+    Serial.printf("📡 ESP-NOW send status: FAIL (code: %d)\n", status);
+    // Log failure reasons for debugging
+    if (status == ESP_NOW_SEND_FAIL) {
+      Serial.println("   Reason: General failure - check receiver is powered on and on same channel");
+    }
+  }
 }
 
 void handleControlPacket(const ControlPacket &cmd) {
@@ -352,8 +359,14 @@ void initEspNow() {
                 addStatus == ESP_OK ? "OK" : String(addStatus).c_str());
   if (addStatus != ESP_OK) {
     Serial.println("❌ Failed to add receiver peer");
+    Serial.printf("   Error code: %d\n", addStatus);
   } else {
     Serial.println("✅ ESP-NOW peer configured");
+    Serial.printf("   Sending to receiver MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                  RECEIVER_MAC[0], RECEIVER_MAC[1], RECEIVER_MAC[2],
+                  RECEIVER_MAC[3], RECEIVER_MAC[4], RECEIVER_MAC[5]);
+    Serial.printf("   Transmitter MAC: %s\n", WiFi.macAddress().c_str());
+    Serial.println("   Channel: 1 (locked for ESP-NOW)");
   }
 }
 
@@ -430,6 +443,15 @@ void sendTelemetry() {
   esp_err_t result = esp_now_send(RECEIVER_MAC, (uint8_t*)&pkt, sizeof(pkt));
   if (result != ESP_OK) {
     Serial.printf("⚠️ Telemetry send failed: %d\n", result);
+    if (result == ESP_ERR_ESPNOW_NOT_INIT) {
+      Serial.println("   Error: ESP-NOW not initialized");
+    } else if (result == ESP_ERR_ESPNOW_ARG) {
+      Serial.println("   Error: Invalid argument - check RECEIVER_MAC");
+    } else if (result == ESP_ERR_ESPNOW_NO_MEM) {
+      Serial.println("   Error: Out of memory");
+    } else if (result == ESP_ERR_ESPNOW_NOT_FOUND) {
+      Serial.println("   Error: Peer not found - receiver may not be configured");
+    }
   }
 }
 

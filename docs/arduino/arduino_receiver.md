@@ -117,6 +117,8 @@ struct ControlPacket {
   TelemetryPacket latestTelemetry = {};
   bool hasTelemetry = false;
   unsigned long lastTelemetryMs = 0;
+  const unsigned long TELEMETRY_TIMEOUT_MS = 10000;  // 10 seconds - mark data as stale if no updates
+  const unsigned long CONNECTION_LOST_TIMEOUT_MS = 30000;  // 30 seconds - consider connection lost
 
   // === Grid price mirror ===
   float gridPriceRx = 12.0f;
@@ -245,6 +247,14 @@ struct ControlPacket {
       Serial.printf("   Gateway: %s\n", WiFi.gatewayIP().toString().c_str());
       Serial.printf("   Subnet:  %s\n", WiFi.subnetMask().toString().c_str());
       
+      // CRITICAL: Lock WiFi channel to channel 1 for ESP-NOW compatibility
+      // Even though we're connected to WiFi, ESP-NOW requires both devices on the same channel
+      // The transmitter is locked to channel 1, so we must match it
+      esp_wifi_set_promiscuous(true);
+      esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
+      esp_wifi_set_promiscuous(false);
+      Serial.printf("📡 WiFi channel locked to %u for ESP-NOW compatibility\n", WIFI_CHANNEL);
+      
       // Keep AP active for easy reconfiguration - don't disable it
       // If you want to disable AP to save power, uncomment the next two lines:
       // WiFi.mode(WIFI_STA);
@@ -341,9 +351,22 @@ void reconnectWiFi() {
       Serial.println("   ⚠️ AP IP still not assigned. Try: http://192.168.4.1/wifi-setup");
     }
     
+    // Lock WiFi channel to channel 1 BEFORE connecting to WiFi Station
+    // This ensures ESP-NOW works even if router is on a different channel
+    esp_wifi_set_promiscuous(true);
+    esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
+    esp_wifi_set_promiscuous(false);
+    Serial.printf("📡 WiFi channel locked to %u for ESP-NOW\n", WIFI_CHANNEL);
+    
     // Then try to connect to WiFi Station (if configured)
     // AP will remain active in AP_STA mode, allowing reconfiguration
     initWiFiStation();
+    
+    // Re-lock channel after WiFi connection (in case it changed)
+    // This is critical - WiFi connection may change the channel
+    esp_wifi_set_promiscuous(true);
+    esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
+    esp_wifi_set_promiscuous(false);
     
     if (esp_now_init() != ESP_OK) {
       Serial.println("❌ ESP-NOW init failed");
@@ -565,17 +588,54 @@ void reconnectWiFi() {
       return;
     }
     
-    if (!hasTelemetry) {
-      // Debug: Log when waiting for telemetry (only once per 60 seconds to avoid spam)
-      static unsigned long lastNoTelemetryLog = 0;
-      if (millis() - lastNoTelemetryLog > 60000) {
-        lastNoTelemetryLog = millis();
-        Serial.println("⏳ Waiting for ESP-NOW telemetry data from transmitter...");
+    unsigned long now = millis();
+    
+    // Check if telemetry data is stale or missing
+    if (!hasTelemetry || (lastTelemetryMs > 0 && (now - lastTelemetryMs) > TELEMETRY_TIMEOUT_MS)) {
+      // Mark as stale if we had data but it's old
+      if (hasTelemetry && (now - lastTelemetryMs) > TELEMETRY_TIMEOUT_MS) {
+        hasTelemetry = false;
+        Serial.printf("⚠️ Telemetry data expired (last received %lu ms ago)\n", now - lastTelemetryMs);
       }
+      
+      // Log connection status periodically
+      static unsigned long lastNoTelemetryLog = 0;
+      if (now - lastNoTelemetryLog > 60000) {  // Every 60 seconds
+        lastNoTelemetryLog = now;
+        if (lastTelemetryMs == 0) {
+          Serial.println("⏳ Waiting for ESP-NOW telemetry data from transmitter...");
+          Serial.println("   Check: 1) Transmitter is powered on");
+          Serial.println("         2) Transmitter MAC matches receiver configuration");
+          Serial.println("         3) Both devices on same WiFi channel (channel 1)");
+          Serial.println("         4) Devices are within range");
+        } else {
+          unsigned long timeSinceLast = now - lastTelemetryMs;
+          Serial.printf("⚠️ No telemetry received for %lu seconds\n", timeSinceLast / 1000);
+          if (timeSinceLast > CONNECTION_LOST_TIMEOUT_MS) {
+            Serial.println("❌ Connection to transmitter appears lost!");
+            Serial.println("   Attempting diagnostic checks...");
+            // Publish connection lost status to MQTT
+            String statusTopic = "solar-tracker/" + deviceId + "/status";
+            String statusMsg = "{\"status\":\"transmitter_disconnected\",\"last_telemetry_ms\":" + 
+                              String(lastTelemetryMs) + ",\"timeout_ms\":" + String(timeSinceLast) + "}";
+            mqttClient.publish(statusTopic.c_str(), statusMsg.c_str(), true);  // Retained message
+          }
+        }
+      }
+      
+      // Publish a status message indicating no data (but only occasionally to avoid spam)
+      static unsigned long lastStatusPublish = 0;
+      if (now - lastStatusPublish > 30000) {  // Every 30 seconds
+        lastStatusPublish = now;
+        String statusTopic = "solar-tracker/" + deviceId + "/status";
+        String statusMsg = "{\"status\":\"waiting_for_transmitter\",\"timestamp\":" + String(now) + "}";
+        mqttClient.publish(statusTopic.c_str(), statusMsg.c_str(), true);  // Retained message
+      }
+      
       return;
     }
     
-    unsigned long now = millis();
+    // Data is fresh, proceed with normal publishing
     if (now - lastMqttPublishMs < MQTT_PUBLISH_INTERVAL_MS) {
       return;
     }
@@ -623,8 +683,18 @@ void reconnectWiFi() {
       static unsigned long lastPublishLog = 0;
       if (millis() - lastPublishLog > 5000) {  // Log every 5 seconds
         lastPublishLog = millis();
-        Serial.printf("📤 Telemetry published: power=%.2fW, batt=%.1f%%, mode=%s\n", 
-                      latestTelemetry.powerW, latestTelemetry.batteryPct, latestTelemetry.mode);
+        unsigned long age = millis() - lastTelemetryMs;
+        Serial.printf("📤 Telemetry published: power=%.2fW, batt=%.1f%%, mode=%s (age: %lu ms)\n", 
+                      latestTelemetry.powerW, latestTelemetry.batteryPct, latestTelemetry.mode, age);
+      }
+      
+      // Publish connection status when data is fresh
+      static unsigned long lastStatusPublish = 0;
+      if (millis() - lastStatusPublish > 60000) {  // Every 60 seconds
+        lastStatusPublish = millis();
+        String statusTopic = "solar-tracker/" + deviceId + "/status";
+        String statusMsg = "{\"status\":\"connected\",\"timestamp\":" + String(millis()) + "}";
+        mqttClient.publish(statusTopic.c_str(), statusMsg.c_str(), true);  // Retained message
       }
     } else {
       Serial.println("⚠️ MQTT publish failed");
@@ -634,7 +704,10 @@ void reconnectWiFi() {
 
   void sendTelemetryJson() {
     String json = "{";
-    if (hasTelemetry) {
+    unsigned long now = millis();
+    bool dataIsFresh = hasTelemetry && (lastTelemetryMs > 0) && ((now - lastTelemetryMs) <= TELEMETRY_TIMEOUT_MS);
+    
+    if (dataIsFresh) {
       json += "\"mode\":\"live\",";
       json += "\"top\":" + String(latestTelemetry.top) + ",";
       json += "\"left\":" + String(latestTelemetry.left) + ",";
@@ -684,9 +757,14 @@ void reconnectWiFi() {
       }
       json += "\"deviceName\":\"" + currentDevice + "\"";
     } else {
-      // No telemetry data available - return null values to indicate no data
+      // No telemetry data available or data is stale - return null values to indicate no data
       // Frontend will display "--" for missing values
-      json += "\"mode\":\"no_data\",";
+      String dataStatus = "no_data";
+      if (hasTelemetry && (now - lastTelemetryMs) > TELEMETRY_TIMEOUT_MS) {
+        dataStatus = "stale";
+      }
+      json += "\"mode\":\"" + dataStatus + "\",";
+      json += "\"lastTelemetryAge\":" + String(lastTelemetryMs > 0 ? (now - lastTelemetryMs) : -1) + ",";
       json += "\"top\":null,";
       json += "\"left\":null,";
       json += "\"right\":null,";
@@ -1055,12 +1133,39 @@ void loop() {
       Serial.println("📡 AP reactivated (was in STA-only mode)");
     }
     
+    // CRITICAL: Re-lock channel to 1 periodically to ensure ESP-NOW works
+    // WiFi connection may cause channel drift over time
+    static unsigned long lastChannelLock = 0;
+    if (millis() - lastChannelLock > 10000) {  // Lock every 10 seconds
+      lastChannelLock = millis();
+      esp_wifi_set_promiscuous(true);
+      esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
+      esp_wifi_set_promiscuous(false);
+    }
+    
     // Handle MQTT
     if (!mqttClient.connected()) {
       reconnectMqtt();
     } else {
       mqttClient.loop();
       publishTelemetry();
+    }
+    
+    // Periodically check ESP-NOW connection health
+    static unsigned long lastConnectionCheck = 0;
+    if (millis() - lastConnectionCheck > 5000) {  // Check every 5 seconds
+      lastConnectionCheck = millis();
+      if (hasTelemetry && lastTelemetryMs > 0) {
+        unsigned long timeSinceLast = millis() - lastTelemetryMs;
+        if (timeSinceLast > CONNECTION_LOST_TIMEOUT_MS) {
+          Serial.println("⚠️ ESP-NOW connection health check: Data timeout exceeded");
+          Serial.println("   This may indicate:");
+          Serial.println("   - Transmitter is powered off or crashed");
+          Serial.println("   - WiFi channel mismatch (both should be on channel 1)");
+          Serial.println("   - Devices out of range");
+          Serial.println("   - MAC address mismatch");
+        }
+      }
     }
   }
 }

@@ -1,5 +1,5 @@
 import express from "express";
-import { dbPing, initSchema } from "./db.js";
+import { dbPing, initSchema, seedSampleTelemetry } from "./db.js";
 import { startIngestLoop } from "./ingest.js";
 import { pool } from "./db.js";
 import { asyncHandler, createErrorResponse, handleDatabaseError } from "./errorHandler.js";
@@ -242,7 +242,7 @@ app.get("/api/devices", asyncHandler(async (req, res) => {
 
 // Grid price endpoints: save and retrieve grid price
 app.post("/api/grid-price", asyncHandler(async (req, res) => {
-  const { price } = req.body;
+  const { price, device_name } = req.body;
   
   if (price === undefined || price === null) {
     const error = new Error("price is required");
@@ -256,15 +256,25 @@ app.post("/api/grid-price", asyncHandler(async (req, res) => {
     error.statusCode = 400;
     throw error;
   }
+
+  // Validate device_name if provided
+  const deviceName = device_name && typeof device_name === "string" 
+    ? device_name.trim() 
+    : null;
+  if (deviceName && deviceName.length > 64) {
+    const error = new Error("device_name must be 64 characters or less");
+    error.statusCode = 400;
+    throw error;
+  }
   
   try {
-    // Insert new grid price record
+    // Insert new grid price record (with optional device_name)
     const [result] = await pool.query(
-      "INSERT INTO grid_price (price) VALUES (?)",
-      [priceNum]
+      "INSERT INTO grid_price (price, device_name) VALUES (?, ?)",
+      [priceNum, deviceName]
     );
     
-    return res.json({ ok: true, id: result.insertId, price: priceNum });
+    return res.json({ ok: true, id: result.insertId, price: priceNum, device_name: deviceName });
   } catch (error) {
     handleDatabaseError(error, "grid_price insert");
     throw error;
@@ -273,13 +283,26 @@ app.post("/api/grid-price", asyncHandler(async (req, res) => {
 
 app.get("/api/grid-price", asyncHandler(async (req, res) => {
   try {
-    const [rows] = await pool.query(
-      "SELECT price FROM grid_price ORDER BY updated_at DESC, id DESC LIMIT 1"
-    );
+    const device_name = req.query.device_name;
+    
+    let query, params;
+    if (device_name && typeof device_name === "string" && device_name.trim().length > 0) {
+      // Get grid price for specific device
+      query = "SELECT price, device_name FROM grid_price WHERE device_name = ? ORDER BY updated_at DESC, id DESC LIMIT 1";
+      params = [device_name.trim()];
+    } else {
+      // Get most recent grid price (global or any device)
+      query = "SELECT price, device_name FROM grid_price ORDER BY updated_at DESC, id DESC LIMIT 1";
+      params = [];
+    }
+    
+    const [rows] = await pool.query(query, params);
     const price = rows?.[0]?.price !== null && rows?.[0]?.price !== undefined 
       ? Number(rows[0].price) 
       : null;
-    return res.json({ ok: true, price });
+    const deviceName = rows?.[0]?.device_name || null;
+    
+    return res.json({ ok: true, price, device_name: deviceName });
   } catch (error) {
     handleDatabaseError(error, "grid_price query");
     throw error;
@@ -292,6 +315,8 @@ const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 async function startServer() {
   try {
     await initSchema();
+    // Seed sample data if table is empty (or if SEED_SAMPLE_DATA=true)
+    await seedSampleTelemetry();
   } catch (error) {
     handleDatabaseError(error, "schema initialization");
     process.exit(1);
