@@ -801,6 +801,12 @@ export default function Home() {
                   return new Date(b.lastTime).getTime() - new Date(a.lastTime).getTime();
                 });
 
+                // Limit to 10 most recent devices
+                const MAX_DEVICES = 10;
+                const displayDevices = deviceLastTimes.slice(0, MAX_DEVICES);
+                const hasMoreDevices = deviceLastTimes.length > MAX_DEVICES;
+                const remainingCount = deviceLastTimes.length - MAX_DEVICES;
+
                 return (
                   <>
                     {/* Left Column: Grid Price & Estimated Savings (wider) */}
@@ -870,36 +876,50 @@ export default function Home() {
                       </div>
                     </div>
 
-                    {/* Right Column: Device List (narrower) */}
+                    {/* Right Column: Recent Devices List (narrower) */}
                     <div style={{ flex: "1", minWidth: "0" }}>
                       <div className="history-logs-section">
                         <div className="history-logs-section-header">
-                          <h4>Devices</h4>
+                          <h4>Recent Devices</h4>
                           <span className="history-logs-section-count">
                             {registeredDevices.length} registered device{registeredDevices.length !== 1 ? "s" : ""}
                           </span>
                         </div>
                         <div className="history-logs-table-container">
-                          {deviceLastTimes.length > 0 ? (
-                            <div style={{ padding: "12px 0" }}>
-                              {deviceLastTimes.map((device, idx) => (
-                                <div 
-                                  key={idx} 
-                                  style={{ 
-                                    display: "flex", 
-                                    justifyContent: "space-between", 
-                                    alignItems: "center",
-                                    padding: "8px 12px",
-                                    borderBottom: idx < deviceLastTimes.length - 1 ? "1px solid var(--grid)" : "none"
-                                  }}
-                                >
-                                  <span style={{ fontWeight: "500" }}>{device.name}</span>
-                                  <span style={{ color: "var(--muted)", fontSize: "13px" }}>
-                                    {device.lastTime ? formatTimeAgo(device.lastTime) : "Never"}
-                                  </span>
+                          {displayDevices.length > 0 ? (
+                            <>
+                              <div style={{ padding: "12px 0" }}>
+                                {displayDevices.map((device, idx) => (
+                                  <div 
+                                    key={idx} 
+                                    style={{ 
+                                      display: "flex", 
+                                      justifyContent: "space-between", 
+                                      alignItems: "center",
+                                      padding: "8px 12px",
+                                      borderBottom: idx < displayDevices.length - 1 ? "1px solid var(--grid)" : "none"
+                                    }}
+                                  >
+                                    <span style={{ fontWeight: "500" }}>{device.name}</span>
+                                    <span style={{ color: "var(--muted)", fontSize: "13px" }}>
+                                      {device.lastTime ? formatTimeAgo(device.lastTime) : "Never"}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                              {hasMoreDevices && (
+                                <div style={{ 
+                                  textAlign: "center", 
+                                  color: "var(--muted)", 
+                                  fontSize: "12px",
+                                  padding: "12px",
+                                  borderTop: "1px solid var(--grid)",
+                                  fontStyle: "italic"
+                                }}>
+                                  Showing {MAX_DEVICES} of {registeredDevices.length} devices. {remainingCount} more not shown.
                                 </div>
-                              ))}
-                            </div>
+                              )}
+                            </>
                           ) : (
                             <div style={{ textAlign: "center", color: "var(--muted)", padding: "20px" }}>
                               No registered devices
