@@ -507,13 +507,13 @@ export default function Home() {
                       placeholder="Enter price (e.g., 20.00)"
                       step="0.01"
                       min="0"
-                      max="1000"
+                      max="100000"
                       style={{ flex: "1", minWidth: "0" }}
                     />
                     <button
                       className="manual-btn"
                       onClick={gridPrice.handleSaveGridPrice}
-                      disabled={!gridPrice.gridPrice || isNaN(parseFloat(gridPrice.gridPrice)) || parseFloat(gridPrice.gridPrice) <= 0 || parseFloat(gridPrice.gridPrice) >= 1000}
+                      disabled={!gridPrice.gridPrice || isNaN(parseFloat(gridPrice.gridPrice)) || parseFloat(gridPrice.gridPrice) <= 0 || parseFloat(gridPrice.gridPrice) >= 100000}
                       style={{ whiteSpace: "nowrap" }}
                     >
                       Estimate Savings

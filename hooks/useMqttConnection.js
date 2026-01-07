@@ -112,8 +112,8 @@ export function useMqttConnection(onTelemetryProcessed, setCurrentDevice) {
       
       if (params.newPrice !== undefined) {
         controlMessage.gridPrice = parseFloat(params.newPrice);
-        if (isNaN(controlMessage.gridPrice) || controlMessage.gridPrice <= 0 || controlMessage.gridPrice >= 1000) {
-          throw new Error("Invalid grid price (must be 0 to 1000)");
+        if (isNaN(controlMessage.gridPrice) || controlMessage.gridPrice <= 0 || controlMessage.gridPrice >= 100000) {
+          throw new Error("Invalid grid price (must be 0 to 100,000 cents/kWh)");
         }
       }
       

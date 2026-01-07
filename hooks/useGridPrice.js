@@ -117,8 +117,8 @@ export function useGridPrice(sendControl, setError) {
   const handleSaveGridPrice = async () => {
     try {
       const price = parseFloat(gridPrice);
-      if (isNaN(price) || price <= 0 || price >= 1000) {
-        setError("Invalid price (must be 0 to 1000)");
+      if (isNaN(price) || price <= 0 || price >= 100000) {
+        setError("Invalid price (must be 0 to 100,000 cents/kWh)");
         setGridPrice("");
         return;
       }

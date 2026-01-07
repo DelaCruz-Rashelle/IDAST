@@ -397,8 +397,8 @@ app.post("/api/grid-price", asyncHandler(async (req, res) => {
   }
   
   const priceNum = Number(price);
-  if (!Number.isFinite(priceNum) || priceNum <= 0 || priceNum >= 1000) {
-    const error = new Error("price must be a number between 0 and 1000");
+  if (!Number.isFinite(priceNum) || priceNum <= 0 || priceNum >= 100000) {
+    const error = new Error("price must be a number between 0 and 100,000 cents/kWh");
     error.statusCode = 400;
     throw error;
   }
