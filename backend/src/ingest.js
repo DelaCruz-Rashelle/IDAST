@@ -78,6 +78,27 @@ export async function updateDeviceFromTelemetry(t) {
       throw error; // Re-throw to allow caller to handle
     }
   }
+
+  // Store telemetry data in device_state table (for graph display and Monthly Report stats)
+  // Insert new row for each telemetry reading to maintain history
+  if (t.deviceName && (t.deviceName.trim() !== "" && t.deviceName.trim().toLowerCase() !== "unknown")) {
+    const deviceName = t.deviceName.trim();
+    const energyWh = toNum(t.energyWh) ?? toNum(t.energy_wh) ?? null;
+    const batteryPct = toNum(t.batteryPct) ?? toNum(t.battery_pct) ?? null;
+    const ts = t.ts ? new Date(t.ts) : new Date();
+
+    try {
+      // Insert new device state entry (allows multiple entries per device for history)
+      await pool.execute(
+        `INSERT INTO device_state (device_name, energy_wh, battery_pct, ts) 
+         VALUES (?, ?, ?, ?)`,
+        [deviceName, energyWh, batteryPct, ts]
+      );
+    } catch (error) {
+      handleDatabaseError(error, "save device_state from telemetry");
+      // Don't throw - allow device registration to succeed even if state save fails
+    }
+  }
 }
 
 export function startIngestLoop({ logger = console } = {}) {

@@ -60,6 +60,22 @@ export async function initSchema() {
     await conn.query(registrationSql);
     console.log("Database schema initialized (device_registration table ready)");
 
+    // Create device_state table (for graph display and Monthly Report stats)
+    const deviceStateSql = `CREATE TABLE IF NOT EXISTS device_state (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  device_name VARCHAR(64) NOT NULL,
+  energy_wh DECIMAL(12,3) NULL,
+  battery_pct DECIMAL(5,1) NULL,
+  ts TIMESTAMP(3) NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_device_name (device_name),
+  INDEX idx_ts (ts),
+  INDEX idx_updated_at (updated_at)
+)`;
+    await conn.query(deviceStateSql);
+    console.log("Database schema initialized (device_state table ready)");
+
     // Migration: Migrate data from old device table to new tables
     try {
       const [tables] = await conn.query(
@@ -204,9 +220,16 @@ export async function seedSampleDevices() {
          ON DUPLICATE KEY UPDATE updated_at = CURRENT_TIMESTAMP(3)`,
         [device.device_name]
       );
+
+      // Insert into device_state (for graph display and Monthly Report stats)
+      await conn.query(
+        `INSERT INTO device_state (device_name, energy_wh, battery_pct, ts) 
+         VALUES (?, ?, ?, ?)`,
+        [device.device_name, device.energy_wh, device.battery_pct, device.ts]
+      );
     }
 
-    console.log("[Seed] ✅ Successfully registered 5 sample devices");
+    console.log("[Seed] ✅ Successfully registered 5 sample devices with state data");
 
     // Note: Grid prices are not auto-inserted - users must click "Estimate Savings" button to save grid prices
   } catch (error) {

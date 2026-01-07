@@ -755,7 +755,7 @@ export default function Home() {
             )}
             
             {!historyData.historyLogsLoading && (
-            <div className="history-logs-content">
+            <div className="history-logs-content" style={{ display: "flex", gap: "24px", alignItems: "flex-start" }}>
               {/* Helper function to format time ago */}
               {(() => {
                 const formatTimeAgo = (dateString) => {
@@ -803,110 +803,114 @@ export default function Home() {
 
                 return (
                   <>
-                    {/* Device List Section */}
-                    <div className="history-logs-section">
-                      <div className="history-logs-section-header">
-                        <h4>Devices</h4>
-                        <span className="history-logs-section-count">
-                          {registeredDevices.length} registered device{registeredDevices.length !== 1 ? "s" : ""}
-                        </span>
-                      </div>
-                      <div className="history-logs-table-container">
-                        {deviceLastTimes.length > 0 ? (
-                          <div style={{ padding: "12px 0" }}>
-                            {deviceLastTimes.map((device, idx) => (
-                              <div 
-                                key={idx} 
-                                style={{ 
-                                  display: "flex", 
-                                  justifyContent: "space-between", 
-                                  alignItems: "center",
-                                  padding: "8px 12px",
-                                  borderBottom: idx < deviceLastTimes.length - 1 ? "1px solid var(--grid)" : "none"
-                                }}
-                              >
-                                <span style={{ fontWeight: "500" }}>{device.name}</span>
-                                <span style={{ color: "var(--muted)", fontSize: "13px" }}>
-                                  {device.lastTime ? formatTimeAgo(device.lastTime) : "Never"}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <div style={{ textAlign: "center", color: "var(--muted)", padding: "20px" }}>
-                            No registered devices
+                    {/* Left Column: Grid Price & Estimated Savings (wider) */}
+                    <div style={{ flex: "2", minWidth: "0" }}>
+                      <div className="history-logs-section">
+                        <div className="history-logs-section-header">
+                          <h4>Grid Price & Estimated Savings</h4>
+                          <span className="history-logs-section-count">
+                            {historyData.historyLogsData.grid_prices.length} price entries
+                          </span>
+                        </div>
+                        {gridPrice.savedGridPrice !== null && (
+                          <div className="history-logs-current-savings">
+                            <div className="history-logs-current-savings-label">Current Grid Price:</div>
+                            <div className="history-logs-current-savings-value">
+                              {gridPrice.savedGridPrice.toFixed(2)} cents/kWh
+                            </div>
+                            <div className="history-logs-current-savings-label" style={{ marginTop: "8px" }}>
+                              Total Estimated Savings:
+                            </div>
+                            <div className="history-logs-current-savings-value">
+                              ₱{((totalEnergyKWh * gridPrice.savedGridPrice) / 100).toFixed(2)}
+                            </div>
                           </div>
                         )}
+                        <div className="history-logs-table-container">
+                          <table className="history-logs-table">
+                            <thead>
+                              <tr>
+                                <th>ID</th>
+                                <th>Price (cents/kWh)</th>
+                                <th>Estimated Savings (₱)</th>
+                                <th>Created At</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {historyData.historyLogsData.grid_prices.length > 0 ? (
+                                historyData.historyLogsData.grid_prices.map((price) => (
+                                  <tr key={price.id}>
+                                    <td>{price.id}</td>
+                                    <td>{Number(price.price).toFixed(2)}</td>
+                                    <td>{price.estimated_savings !== null && price.estimated_savings !== undefined ? `₱${Number(price.estimated_savings).toFixed(2)}` : "—"}</td>
+                                    <td className="mono">
+                                      {price.created_at 
+                                        ? new Date(price.created_at).toLocaleString("en-US", { 
+                                            year: "numeric", 
+                                            month: "short", 
+                                            day: "numeric", 
+                                            hour: "2-digit", 
+                                            minute: "2-digit",
+                                            second: "2-digit"
+                                          })
+                                        : "—"}
+                                    </td>
+                                  </tr>
+                                ))
+                              ) : (
+                                <tr>
+                                  <td colSpan="4" style={{ textAlign: "center", color: "var(--muted)", padding: "20px" }}>
+                                    No grid price history available
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
                       </div>
                     </div>
 
-                    {/* Grid Price Estimated Savings Section */}
+                    {/* Right Column: Device List (narrower) */}
+                    <div style={{ flex: "1", minWidth: "0" }}>
+                      <div className="history-logs-section">
+                        <div className="history-logs-section-header">
+                          <h4>Devices</h4>
+                          <span className="history-logs-section-count">
+                            {registeredDevices.length} registered device{registeredDevices.length !== 1 ? "s" : ""}
+                          </span>
+                        </div>
+                        <div className="history-logs-table-container">
+                          {deviceLastTimes.length > 0 ? (
+                            <div style={{ padding: "12px 0" }}>
+                              {deviceLastTimes.map((device, idx) => (
+                                <div 
+                                  key={idx} 
+                                  style={{ 
+                                    display: "flex", 
+                                    justifyContent: "space-between", 
+                                    alignItems: "center",
+                                    padding: "8px 12px",
+                                    borderBottom: idx < deviceLastTimes.length - 1 ? "1px solid var(--grid)" : "none"
+                                  }}
+                                >
+                                  <span style={{ fontWeight: "500" }}>{device.name}</span>
+                                  <span style={{ color: "var(--muted)", fontSize: "13px" }}>
+                                    {device.lastTime ? formatTimeAgo(device.lastTime) : "Never"}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div style={{ textAlign: "center", color: "var(--muted)", padding: "20px" }}>
+                              No registered devices
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   </>
                 );
               })()}
-              <div className="history-logs-section">
-                <div className="history-logs-section-header">
-                  <h4>Grid Price & Estimated Savings</h4>
-                  <span className="history-logs-section-count">
-                    {historyData.historyLogsData.grid_prices.length} price entries
-                  </span>
-                </div>
-                {gridPrice.savedGridPrice !== null && (
-                  <div className="history-logs-current-savings">
-                    <div className="history-logs-current-savings-label">Current Grid Price:</div>
-                    <div className="history-logs-current-savings-value">
-                      {gridPrice.savedGridPrice.toFixed(2)} cents/kWh
-                    </div>
-                    <div className="history-logs-current-savings-label" style={{ marginTop: "8px" }}>
-                      Total Estimated Savings:
-                    </div>
-                    <div className="history-logs-current-savings-value">
-                      ₱{((totalEnergyKWh * gridPrice.savedGridPrice) / 100).toFixed(2)}
-                    </div>
-                  </div>
-                )}
-                <div className="history-logs-table-container">
-                  <table className="history-logs-table">
-                    <thead>
-                      <tr>
-                        <th>ID</th>
-                        <th>Price (cents/kWh)</th>
-                        <th>Estimated Savings (₱)</th>
-                        <th>Created At</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {historyData.historyLogsData.grid_prices.length > 0 ? (
-                        historyData.historyLogsData.grid_prices.map((price) => (
-                          <tr key={price.id}>
-                            <td>{price.id}</td>
-                            <td>{Number(price.price).toFixed(2)}</td>
-                            <td>{price.estimated_savings !== null && price.estimated_savings !== undefined ? `₱${Number(price.estimated_savings).toFixed(2)}` : "—"}</td>
-                            <td className="mono">
-                              {price.created_at 
-                                ? new Date(price.created_at).toLocaleString("en-US", { 
-                                    year: "numeric", 
-                                    month: "short", 
-                                    day: "numeric", 
-                                    hour: "2-digit", 
-                                    minute: "2-digit",
-                                    second: "2-digit"
-                                  })
-                                : "—"}
-                            </td>
-                          </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan="4" style={{ textAlign: "center", color: "var(--muted)", padding: "20px" }}>
-                            No grid price history available
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
             </div>
             )}
           </div>

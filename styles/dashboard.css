@@ -988,8 +988,14 @@ footer {
   overflow-y: auto;
   padding: 20px;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: 24px;
+}
+
+@media (max-width: 768px) {
+  .history-logs-content {
+    flex-direction: column;
+  }
 }
 
 .history-logs-section {
