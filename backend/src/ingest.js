@@ -52,44 +52,29 @@ async function handleMqttMessage(topic, message) {
       return;
     }
     
-    // Update device_state table with telemetry data
+    // Register device from telemetry data
     await updateDeviceFromTelemetry(telemetry);
-    console.log(`✅ Device state updated from telemetry: ${telemetry.device_id || "unknown"}`);
+    console.log(`✅ Device registered from telemetry: ${telemetry.device_id || "unknown"}`);
   } catch (err) {
     handleMqttError(err, topic, message);
   }
 }
 
 export async function updateDeviceFromTelemetry(t) {
-  // Update device_state table with latest telemetry data
+  // Register device from telemetry data (update device_registration)
   if (t.deviceName && (t.deviceName.trim() !== "" && t.deviceName.trim().toLowerCase() !== "unknown")) {
     const deviceName = t.deviceName.trim();
-    const energyWh = toNum(t.energyWh);
-    const batteryPct = toNum(t.batteryPct);
-    const timestamp = new Date(); // Use current timestamp for device state
     
     try {
-      // Ensure device is registered first (create if doesn't exist)
+      // Ensure device is registered (create if doesn't exist, update timestamp if exists)
       await pool.execute(
         `INSERT INTO device_registration (device_name) 
          VALUES (?)
          ON DUPLICATE KEY UPDATE updated_at = CURRENT_TIMESTAMP(3)`,
         [deviceName]
       );
-      
-      // Update or insert device state
-      await pool.execute(
-        `INSERT INTO device_state (device_name, energy_wh, battery_pct, ts) 
-         VALUES (?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE 
-           energy_wh = VALUES(energy_wh),
-           battery_pct = VALUES(battery_pct),
-           ts = VALUES(ts),
-           updated_at = CURRENT_TIMESTAMP(3)`,
-        [deviceName, energyWh, batteryPct, timestamp]
-      );
     } catch (error) {
-      handleDatabaseError(error, "update device state from telemetry");
+      handleDatabaseError(error, "register device from telemetry");
       throw error; // Re-throw to allow caller to handle
     }
   }

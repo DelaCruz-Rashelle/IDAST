@@ -80,9 +80,12 @@ kWh
 
 **How it works:**
 - Multiplies total energy (kWh) by saved grid price (cents/kWh)
-- Uses `savedGridPrice` state variable (only set after user clicks "Save" button)
+- Divides by 100 to convert cents to pesos (since price is in cents/kWh)
+- Uses `savedGridPrice` state variable (only set after user clicks "Estimate Savings" button)
 - Shows "— (Save grid price to calculate)" if no price has been saved
 - Formats as Philippine Peso (₱) with 2 decimal places
+
+**Formula:** `(totalEnergyKWh × gridPrice) / 100 = savings in pesos`
 
 **Data Source:** 
 - `totalEnergyKWh` (calculated from history CSV)
@@ -286,7 +289,8 @@ EMQX Cloud (MQTT Broker)
 2. **Data Storage:**
    - Receives telemetry messages
    - Parses JSON data
-   - Inserts into MySQL `telemetry` table
+   - Registers device in MySQL `device_registration` table (updates `updated_at` timestamp)
+   - Note: Energy and battery data are not stored in database (only in CSV history files)
 
 3. **API Endpoints:**
    - `GET /api/latest` - Returns latest telemetry from database

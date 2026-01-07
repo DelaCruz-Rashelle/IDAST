@@ -22,10 +22,10 @@ export function useHistoryData(onHistoryLoaded) {
   const [deviceStatsError, setDeviceStatsError] = useState(""); // Error state for device stats
   const [deviceStatsLoading, setDeviceStatsLoading] = useState(false); // Loading state for device stats
   const [historyLogsOpen, setHistoryLogsOpen] = useState(false);
-  const [historyLogsData, setHistoryLogsData] = useState({ device_states: [], grid_prices: [] });
+  const [historyLogsData, setHistoryLogsData] = useState({ device_states: [], devices: [], grid_prices: [] });
   const [historyLogsLoading, setHistoryLogsLoading] = useState(false);
   const [historyLogsError, setHistoryLogsError] = useState("");
-  const [historyLogsTab, setHistoryLogsTab] = useState("device_state"); // "device_state" or "grid_price"
+  const [historyLogsTab, setHistoryLogsTab] = useState("devices"); // "devices" or "grid_price"
 
   // Load history CSV for graph display
   const loadHistory = useCallback(async () => {
@@ -153,7 +153,8 @@ export function useHistoryData(onHistoryLoaded) {
       const data = await res.json();
       if (data.ok) {
         setHistoryLogsData({
-          device_states: data.device_states || [],
+          device_states: data.device_states || [], // Empty for backward compatibility
+          devices: data.devices || [], // Device registration data
           grid_prices: data.grid_prices || []
         });
         setHistoryLogsError(""); // Clear any previous errors on success

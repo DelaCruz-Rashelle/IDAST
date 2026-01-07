@@ -153,7 +153,7 @@ solar-tracker/{device_id}/history
 - Published by frontend dashboard when:
   - User clicks "Save" button for grid price (saves to database + sends via MQTT)
   - User clicks "Start Charging" button (saves device name to database + sends via MQTT)
-- **Database Storage:** Both grid price and device name are saved to MySQL database (`grid_price` and `device` tables) before being sent via MQTT
+- **Database Storage:** Grid price is saved to MySQL database (`grid_price` table). Device registration is saved to `device_registration` table when telemetry is received via MQTT
 - ESP32 receiver subscribes to this topic and forwards commands to transmitter via ESP-NOW
 - Transmitter processes commands and updates settings in Preferences (grid price) or session variable (device name)
 

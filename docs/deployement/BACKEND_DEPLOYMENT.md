@@ -128,7 +128,7 @@ After MySQL is provisioned:
 Check backend logs for:
 
 ```
-Database schema initialized (telemetry table ready)
+Database schema initialized (device_registration and grid_price tables ready)
 MQTT ingest starting...
 Connecting to MQTT broker: mqtts://your-broker.emqx.cloud:8883
 ✅ MQTT client connected
@@ -203,24 +203,28 @@ The backend **automatically creates the database schema** when it starts. You do
 ### How It Works
 
 1. On startup, the backend calls `initSchema()` from `backend/src/db.js`
-2. This function creates the `telemetry` table if it doesn't exist
+2. This function creates the following tables if they don't exist:
+   - `device_registration` - Stores registered device names
+   - `grid_price` - Stores grid price values and estimated savings
 3. Uses `CREATE TABLE IF NOT EXISTS`, so it's safe to run multiple times
 4. If schema creation fails, the backend exits with an error
 
 ### Schema Details
 
-The `telemetry` table includes:
+**Table: `device_registration`**
 - **Primary Key**: `id` (auto-incrementing BIGINT)
-- **Timestamp**: `ts` (TIMESTAMP(3) with millisecond precision)
-- **Device Info**: `device_name`
-- **Sensor Data**: `top`, `left`, `right`, `avg`, `horizontal_error`, `vertical_error`
-- **Tracking Data**: `tilt_angle`, `pan_angle`, `pan_target`, `manual`, `steady`
-- **Power Metrics**: `power_w`, `power_actual_w`, `temp_c`
-- **Battery**: `battery_pct`, `battery_v`, `efficiency`
-- **Energy**: `energy_wh`, `energy_kwh`
-- **Environmental**: `co2_kg`, `trees`, `phones`, `phone_minutes`, `pesos`, `grid_price`
-- **Raw Data**: `raw_json` (JSON column storing full telemetry packet)
-- **Index**: `idx_ts` on `ts` column for fast time-based queries
+- **Device Name**: `device_name` (VARCHAR(64), UNIQUE)
+- **Timestamps**: `created_at`, `updated_at` (TIMESTAMP(3) with millisecond precision)
+- **Index**: `idx_device_name` on `device_name` column
+
+**Table: `grid_price`**
+- **Primary Key**: `id` (auto-incrementing BIGINT)
+- **Price**: `price` (DECIMAL(10,2)) - Grid price in cents/kWh
+- **Estimated Savings**: `estimated_savings` (DECIMAL(12,2)) - Calculated savings in pesos
+- **Timestamps**: `created_at`, `updated_at` (TIMESTAMP(3) with millisecond precision)
+- **Index**: `idx_updated_at` on `updated_at` column
+
+**Note:** The `device_state` table has been removed. Energy and battery data are not stored in the database - they come from CSV history files or MQTT telemetry (real-time only).
 
 ### Manual Schema (Optional)
 
@@ -268,11 +272,11 @@ IDAST telemetry backend running
 
 ---
 
-### Latest Telemetry
+### Latest Device
 
 **GET** `/api/latest`
 
-Returns the most recent telemetry record.
+Returns the most recently updated device registration.
 
 **Response:**
 ```json
@@ -280,11 +284,9 @@ Returns the most recent telemetry record.
   "ok": true,
   "data": {
     "id": 123,
-    "ts": "2025-12-16T22:30:00.000Z",
-    "device_name": "ESP32-Solar",
-    "power_w": 45.2,
-    "battery_pct": 87.5,
-    ...
+    "device_name": "iPhone 15",
+    "created_at": "2025-12-16T22:30:00.000Z",
+    "updated_at": "2025-12-16T22:30:00.000Z"
   }
 }
 ```
@@ -303,7 +305,7 @@ Returns the most recent telemetry record.
 
 **GET** `/api/history.csv?days=60`
 
-Returns historical telemetry data in CSV format compatible with the dashboard's history parser.
+Returns empty CSV since `device_state` table has been removed. Historical data is now only available from ESP32 CSV files.
 
 **Query Parameters:**
 - `days` (optional): Number of days to retrieve (default: 60, max: 365)
@@ -311,17 +313,9 @@ Returns historical telemetry data in CSV format compatible with the dashboard's 
 **Response Format:**
 ```csv
 timestamp,energy_wh,battery_pct,device_name,session_min
-1702761600,1250.5,87.5,ESP32-Solar,120
-1702848000,1320.2,89.1,ESP32-Solar,135
-...
 ```
 
-**Data Aggregation:**
-- Data is grouped by day (`DATE(ts)`)
-- `energy_wh` is calculated as `MAX(energy_wh) - MIN(energy_wh)` per day
-- `battery_pct` is the average for the day
-- `device_name` is the last device name seen that day
-- `session_min` is the session duration in minutes
+**Note:** This endpoint returns an empty CSV with headers only. Historical energy data is not stored in the database - it comes from ESP32 CSV history files.
 
 ---
 
@@ -329,7 +323,7 @@ timestamp,energy_wh,battery_pct,device_name,session_min
 
 **GET** `/api/telemetry?from=2025-12-01T00:00:00Z&to=2025-12-16T23:59:59Z&limit=5000`
 
-Returns raw telemetry records for a time range.
+Returns empty data since `device_state` table has been removed.
 
 **Query Parameters:**
 - `from` (optional): ISO 8601 start date/time (default: 24 hours ago)
@@ -342,11 +336,12 @@ Returns raw telemetry records for a time range.
   "ok": true,
   "from": "2025-12-01T00:00:00.000Z",
   "to": "2025-12-16T23:59:59.000Z",
-  "count": 1500,
-  "data": [
-    {
-      "id": 1,
-      "ts": "2025-12-01T00:00:00.000Z",
+  "count": 0,
+  "data": []
+}
+```
+
+**Note:** This endpoint returns empty data. Telemetry data is not stored in the database - it's only available via MQTT in real-time.
       "device_name": "ESP32-Solar",
       "power_w": 45.2,
       ...
@@ -360,7 +355,7 @@ Returns raw telemetry records for a time range.
 
 ## Telemetry Ingestion Service
 
-The backend automatically subscribes to MQTT topics and stores telemetry data in the database.
+The backend automatically subscribes to MQTT topics and registers devices in the database.
 
 ### How It Works
 
@@ -370,7 +365,9 @@ The backend automatically subscribes to MQTT topics and stores telemetry data in
    - `solar-tracker/+/status` - Device status updates
 3. When messages are received:
    - Parses JSON telemetry data
-   - Inserts the data into the `telemetry` table
+   - Extracts `deviceName` from telemetry
+   - Registers device in `device_registration` table (creates if doesn't exist, updates `updated_at` if exists)
+   - Note: Energy and battery data are NOT stored in database (only device registration)
 4. Errors are logged but don't stop the MQTT connection (automatic reconnection)
 
 ### Configuration
@@ -404,7 +401,7 @@ Connecting to MQTT broker: mqtts://your-broker.emqx.cloud:8883
 ✅ MQTT client connected
 ✅ Subscribed to: solar-tracker/+/telemetry
 ✅ Subscribed to: solar-tracker/+/status
-✅ Telemetry stored from device: esp32-receiver-08D1F9
+✅ Device registered from telemetry: esp32-receiver-08D1F9
 ```
 
 Errors:
@@ -458,15 +455,17 @@ MQTT reconnect attempt in 5 seconds...
 
 ---
 
-### No Telemetry Data
+### No Device Registration
 
-**Problem:** `/api/latest` returns `null` or `/api/telemetry` returns empty array
+**Problem:** `/api/latest` returns `null` or `/api/devices` returns empty array
+
+**Note:** `/api/telemetry` and `/api/history.csv` return empty data by design (device_state table removed)
 
 **Check:**
 1. Is ingestion enabled? (`INGEST_ENABLED !== "false"`)
 2. Is `MQTT_BROKER_URL` set correctly?
 3. Check backend logs for MQTT connection status
-4. Verify ESP32 is publishing to MQTT topics
+4. Verify ESP32 is publishing to MQTT topics with `deviceName` field
 5. Check EMQX Cloud dashboard for active connections
 
 **Solutions:**
@@ -475,6 +474,7 @@ MQTT reconnect attempt in 5 seconds...
 - Check ESP32 is connected to WiFi and publishing to MQTT
 - Verify MQTT broker is accessible from Railway
 - Check EMQX Cloud dashboard → Clients to see if backend is connected
+- Ensure ESP32 telemetry includes `deviceName` field (not "Unknown")
 
 ---
 

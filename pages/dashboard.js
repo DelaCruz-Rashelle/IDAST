@@ -29,14 +29,12 @@ export default function Home() {
     currentDevice,
     setCurrentDevice,
     registeredDevices,
-    saveStateStatus,
     deviceNameInputFocusedRef,
     deviceNameDebounceRef,
     deviceNameLoadedFromDbRef,
     loadDeviceName,
     loadRegisteredDevices,
-    saveDeviceName,
-    saveDeviceState
+    saveDeviceName
   } = useDeviceManagement(mqtt.data, mqtt.sendControl);
   
   // 3. Grid price hook (needs sendControl and setError from MQTT)
@@ -271,41 +269,8 @@ export default function Home() {
 
         <div className="grid">
           <div className="card">
-            <h3 style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span>Realtime Tracker Telemetry</span>
-              <button
-                className="manual-btn"
-                onClick={saveDeviceState}
-                disabled={
-                  saveStateStatus.loading || 
-                  !mqtt.data || 
-                  registeredDevices.length === 0 || 
-                  !mqtt.chargingStarted
-                }
-                title={
-                  !mqtt.data 
-                    ? "No telemetry data available" 
-                    : registeredDevices.length === 0 
-                    ? "No registered device. Please register a device first."
-                    : !mqtt.chargingStarted
-                    ? "Please start charging first"
-                    : "Save current device state to database"
-                }
-              >
-                {saveStateStatus.loading ? "Saving..." : saveStateStatus.success ? "✓ Saved" : "Save Device State"}
-              </button>
-            </h3>
+            <h3>Realtime Tracker Telemetry</h3>
             <div className="content">
-              {saveStateStatus.error && (
-                <div style={{ marginBottom: "16px", color: "#dc3545", fontSize: "12px" }}>
-                  {saveStateStatus.error}
-                </div>
-              )}
-              {saveStateStatus.success && !saveStateStatus.error && (
-                <div style={{ marginBottom: "16px", color: "#28a745", fontSize: "12px" }}>
-                  Device state saved successfully
-                </div>
-              )}
               <div className="kpis">
                 <div className="kpi">
                   <div className="label">Panel Power</div>
@@ -791,87 +756,94 @@ export default function Home() {
             
             {!historyData.historyLogsLoading && (
             <div className="history-logs-content">
-              {/* Part 1: Device State Section */}
-              <div className="history-logs-section">
-                <div className="history-logs-section-header">
-                  <h4>Device State</h4>
-                  <span className="history-logs-section-count">
-                    {historyData.historyLogsData.device_states.length} saved states
-                  </span>
-                </div>
-                <div className="history-logs-connected-device">
-                  <div className="history-logs-connected-device-label">Connected Device:</div>
-                  <div className="history-logs-connected-device-value">
-                    {currentDevice && currentDevice !== "Unknown" ? currentDevice : "—"}
-                  </div>
-                  {registeredDevices.length > 0 && (
-                    <div className="history-logs-registered-devices">
-                      <div className="history-logs-registered-devices-label">Registered Devices:</div>
-                      <div className="history-logs-registered-devices-list">
-                        {registeredDevices.join(", ") || "—"}
+              {/* Helper function to format time ago */}
+              {(() => {
+                const formatTimeAgo = (dateString) => {
+                  if (!dateString) return "Never";
+                  const date = new Date(dateString);
+                  const now = new Date();
+                  const diffMs = now - date;
+                  const diffSeconds = Math.floor(diffMs / 1000);
+                  const diffMinutes = Math.floor(diffSeconds / 60);
+                  const diffHours = Math.floor(diffMinutes / 60);
+                  const diffDays = Math.floor(diffHours / 24);
+                  
+                  if (diffSeconds < 60) return "Just now";
+                  if (diffMinutes < 60) return `${diffMinutes} minute${diffMinutes !== 1 ? "s" : ""} ago`;
+                  if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? "s" : ""} ago`;
+                  if (diffDays < 30) return `${diffDays} day${diffDays !== 1 ? "s" : ""} ago`;
+                  
+                  const diffMonths = Math.floor(diffDays / 30);
+                  if (diffMonths < 12) return `${diffMonths} month${diffMonths !== 1 ? "s" : ""} ago`;
+                  
+                  const diffYears = Math.floor(diffDays / 365);
+                  return `${diffYears} year${diffYears !== 1 ? "s" : ""} ago`;
+                };
+
+                // Get last updated time for each registered device from device_registration
+                const deviceLastTimes = registeredDevices.map(deviceName => {
+                  // Find device in history logs devices array (from device_registration table)
+                  const device = historyData.historyLogsData.devices?.find(
+                    d => d.device_name === deviceName
+                  );
+                  
+                  return {
+                    name: deviceName,
+                    lastTime: device?.updated_at || null
+                  };
+                });
+
+                // Sort by most recent first
+                deviceLastTimes.sort((a, b) => {
+                  if (!a.lastTime && !b.lastTime) return 0;
+                  if (!a.lastTime) return 1;
+                  if (!b.lastTime) return -1;
+                  return new Date(b.lastTime).getTime() - new Date(a.lastTime).getTime();
+                });
+
+                return (
+                  <>
+                    {/* Device List Section */}
+                    <div className="history-logs-section">
+                      <div className="history-logs-section-header">
+                        <h4>Devices</h4>
+                        <span className="history-logs-section-count">
+                          {registeredDevices.length} registered device{registeredDevices.length !== 1 ? "s" : ""}
+                        </span>
+                      </div>
+                      <div className="history-logs-table-container">
+                        {deviceLastTimes.length > 0 ? (
+                          <div style={{ padding: "12px 0" }}>
+                            {deviceLastTimes.map((device, idx) => (
+                              <div 
+                                key={idx} 
+                                style={{ 
+                                  display: "flex", 
+                                  justifyContent: "space-between", 
+                                  alignItems: "center",
+                                  padding: "8px 12px",
+                                  borderBottom: idx < deviceLastTimes.length - 1 ? "1px solid var(--grid)" : "none"
+                                }}
+                              >
+                                <span style={{ fontWeight: "500" }}>{device.name}</span>
+                                <span style={{ color: "var(--muted)", fontSize: "13px" }}>
+                                  {device.lastTime ? formatTimeAgo(device.lastTime) : "Never"}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div style={{ textAlign: "center", color: "var(--muted)", padding: "20px" }}>
+                            No registered devices
+                          </div>
+                        )}
                       </div>
                     </div>
-                  )}
-                </div>
-                <div className="history-logs-table-container">
-                  <table className="history-logs-table">
-                    <thead>
-                      <tr>
-                        <th>ID</th>
-                        <th>Device Name</th>
-                        <th>Energy (Wh)</th>
-                        <th>Battery (%)</th>
-                        <th>Timestamp</th>
-                        <th>Updated At</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {historyData.historyLogsData.device_states.length > 0 ? (
-                        historyData.historyLogsData.device_states.map((state) => (
-                          <tr key={state.id}>
-                            <td>{state.id}</td>
-                            <td>{state.device_name || "—"}</td>
-                            <td>{state.energy_wh !== null && state.energy_wh !== undefined ? Number(state.energy_wh).toFixed(3) : "—"}</td>
-                            <td>{state.battery_pct !== null && state.battery_pct !== undefined ? Number(state.battery_pct).toFixed(1) : "—"}</td>
-                            <td className="mono">
-                              {state.ts 
-                                ? new Date(state.ts).toLocaleString("en-US", { 
-                                    year: "numeric", 
-                                    month: "short", 
-                                    day: "numeric", 
-                                    hour: "2-digit", 
-                                    minute: "2-digit",
-                                    second: "2-digit"
-                                  })
-                                : "—"}
-                            </td>
-                            <td className="mono">
-                              {state.updated_at 
-                                ? new Date(state.updated_at).toLocaleString("en-US", { 
-                                    year: "numeric", 
-                                    month: "short", 
-                                    day: "numeric", 
-                                    hour: "2-digit", 
-                                    minute: "2-digit",
-                                    second: "2-digit"
-                                  })
-                                : "—"}
-                            </td>
-                          </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan="6" style={{ textAlign: "center", color: "var(--muted)", padding: "20px" }}>
-                            No device state history available
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
 
-              {/* Part 2: Grid Price Estimated Savings Section */}
+                    {/* Grid Price Estimated Savings Section */}
+                  </>
+                );
+              })()}
               <div className="history-logs-section">
                 <div className="history-logs-section-header">
                   <h4>Grid Price & Estimated Savings</h4>

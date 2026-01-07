@@ -64,14 +64,10 @@ app.get("/api/latest", asyncHandler(async (req, res) => {
       `SELECT 
         r.id,
         r.device_name,
-        s.energy_wh,
-        s.battery_pct,
-        s.ts,
         r.created_at,
-        s.updated_at
+        r.updated_at
        FROM device_registration r
-       LEFT JOIN device_state s ON r.device_name = s.device_name
-       ORDER BY s.ts DESC, s.updated_at DESC, r.id DESC 
+       ORDER BY r.updated_at DESC, r.id DESC 
        LIMIT 1`
     );
     const row = rows?.[0] || null;
@@ -107,36 +103,9 @@ app.get("/api/history.csv", asyncHandler(async (req, res) => {
   }
   
     try {
-      // Fetch from device_state table, grouped by day
-      const [rows] = await conn.query(
-      `
-      SELECT
-        UNIX_TIMESTAMP(day_date) AS day_ts_s,
-        SUM(energy_wh) AS total_energy_wh,
-        AVG(battery_pct) AS avg_battery_pct,
-        GROUP_CONCAT(DISTINCT device_name ORDER BY device_name SEPARATOR ', ') AS device_names,
-        MIN(ts) AS first_ts,
-        MAX(ts) AS last_ts,
-        COUNT(*) AS device_count
-      FROM (
-        SELECT 
-          DATE(COALESCE(ts, updated_at)) AS day_date,
-          ts,
-          energy_wh,
-          battery_pct,
-          device_name
-        FROM device_state
-        WHERE COALESCE(ts, updated_at) >= DATE_SUB(NOW(), INTERVAL ? DAY)
-          AND device_name IS NOT NULL
-          AND device_name != ''
-      ) AS daily_data
-      GROUP BY day_date
-      ORDER BY day_date ASC
-      `,
-      [days]
-    );
-    
-    console.log(`[history.csv] Query returned ${rows.length} rows from device_state table`);
+      // Return empty CSV since device_state table is no longer used
+      const rows = [];
+      console.log(`[history.csv] device_state table removed, returning empty CSV`);
     
     const lines = [];
     lines.push("timestamp,energy_wh,battery_pct,device_name,session_min");
@@ -207,17 +176,10 @@ app.get("/api/telemetry", asyncHandler(async (req, res) => {
   limit = Math.min(limit, 20000);
 
   try {
-    const [rows] = await pool.query(
-      `SELECT * FROM device_state 
-       WHERE COALESCE(ts, updated_at) BETWEEN ? AND ? 
-       ORDER BY COALESCE(ts, updated_at) ASC 
-       LIMIT ?`,
-      [from, to, limit]
-    );
-
-    return res.json({ ok: true, from, to, count: rows.length, data: rows });
+    // Return empty data since device_state table is no longer used
+    return res.json({ ok: true, from, to, count: 0, data: [] });
   } catch (error) {
-    handleDatabaseError(error, "device state query");
+    handleDatabaseError(error, "telemetry query");
     throw error; // Re-throw to be caught by asyncHandler
   }
 }, "API"));
@@ -264,97 +226,18 @@ app.get("/api/device", asyncHandler(async (req, res) => {
     const [rows] = await pool.query(
       `SELECT 
         r.device_name,
-        s.energy_wh,
-        s.battery_pct,
-        s.ts
+        r.updated_at
        FROM device_registration r
-       LEFT JOIN device_state s ON r.device_name = s.device_name
-       ORDER BY s.updated_at DESC, r.updated_at DESC, r.id DESC 
+       ORDER BY r.updated_at DESC, r.id DESC 
        LIMIT 1`
     );
     const device = rows?.[0] || null;
     return res.json({ 
       ok: true, 
-      device_name: device?.device_name || null,
-      energy_wh: device?.energy_wh !== null && device?.energy_wh !== undefined ? Number(device.energy_wh) : null,
-      battery_pct: device?.battery_pct !== null && device?.battery_pct !== undefined ? Number(device.battery_pct) : null,
-      ts: device?.ts || null
+      device_name: device?.device_name || null
     });
   } catch (error) {
     handleDatabaseError(error, "device query");
-    throw error;
-  }
-}, "API"));
-
-// Device state endpoint: save device state manually (dashboard-managed)
-app.post("/api/device-state", asyncHandler(async (req, res) => {
-  const { device_name, energy_wh, battery_pct, ts } = req.body;
-  
-  if (!device_name || typeof device_name !== "string") {
-    const error = new Error("device_name is required and must be a string");
-    error.statusCode = 400;
-    throw error;
-  }
-  
-  if (device_name.length > 64) {
-    const error = new Error("device_name must be 64 characters or less");
-    error.statusCode = 400;
-    throw error;
-  }
-
-  // Validate optional fields
-  const energyWh = energy_wh !== undefined && energy_wh !== null ? Number(energy_wh) : null;
-  const batteryPct = battery_pct !== undefined && battery_pct !== null ? Number(battery_pct) : null;
-  const timestamp = ts ? new Date(ts) : (energyWh !== null || batteryPct !== null ? new Date() : null);
-
-  if (energyWh !== null && (!Number.isFinite(energyWh) || energyWh < 0)) {
-    const error = new Error("energy_wh must be a non-negative number");
-    error.statusCode = 400;
-    throw error;
-  }
-
-  if (batteryPct !== null && (!Number.isFinite(batteryPct) || batteryPct < 0 || batteryPct > 100)) {
-    const error = new Error("battery_pct must be a number between 0 and 100");
-    error.statusCode = 400;
-    throw error;
-  }
-
-  if (timestamp && Number.isNaN(timestamp.getTime())) {
-    const error = new Error("ts must be a valid date");
-    error.statusCode = 400;
-    throw error;
-  }
-  
-  try {
-    // Ensure device exists in device_registration first
-    await pool.query(
-      `INSERT INTO device_registration (device_name) 
-       VALUES (?)
-       ON DUPLICATE KEY UPDATE updated_at = CURRENT_TIMESTAMP(3)`,
-      [device_name.trim()]
-    );
-    
-    // Insert or update device state
-    const [result] = await pool.query(
-      `INSERT INTO device_state (device_name, energy_wh, battery_pct, ts) 
-       VALUES (?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE 
-         energy_wh = COALESCE(VALUES(energy_wh), energy_wh),
-         battery_pct = COALESCE(VALUES(battery_pct), battery_pct),
-         ts = COALESCE(VALUES(ts), ts),
-         updated_at = CURRENT_TIMESTAMP(3)`,
-      [device_name.trim(), energyWh, batteryPct, timestamp]
-    );
-    
-    return res.json({ 
-      ok: true, 
-      device_name: device_name.trim(),
-      energy_wh: energyWh,
-      battery_pct: batteryPct,
-      ts: timestamp
-    });
-  } catch (error) {
-    handleDatabaseError(error, "device state insert");
     throw error;
   }
 }, "API"));
@@ -365,25 +248,15 @@ app.get("/api/devices", asyncHandler(async (req, res) => {
     const [rows] = await pool.query(
       `SELECT 
         r.device_name,
-        s.energy_wh,
-        s.battery_pct,
-        s.ts,
-        UNIX_TIMESTAMP(s.ts) as ts_unix,
         r.created_at,
-        r.updated_at as registration_updated_at,
-        s.updated_at as state_updated_at
+        r.updated_at
        FROM device_registration r
-       LEFT JOIN device_state s ON r.device_name = s.device_name
        ORDER BY r.device_name ASC`
     );
     const devices = rows.map(row => ({
       device_name: row.device_name,
-      energy_wh: row.energy_wh !== null && row.energy_wh !== undefined ? Number(row.energy_wh) : null,
-      battery_pct: row.battery_pct !== null && row.battery_pct !== undefined ? Number(row.battery_pct) : null,
-      ts: row.ts,
-      ts_unix: row.ts_unix ? Number(row.ts_unix) : null,
       created_at: row.created_at,
-      updated_at: row.state_updated_at || row.registration_updated_at
+      updated_at: row.updated_at
     }));
     return res.json({ ok: true, devices });
   } catch (error) {
@@ -400,53 +273,11 @@ app.get("/api/device-stats", asyncHandler(async (req, res) => {
     if (!Number.isFinite(days) || days <= 0) days = 60;
     days = Math.min(days, 365);
 
-    // Get all devices with energy data from device_state
-    const [rows] = await pool.query(
-      `
-      SELECT 
-        device_name,
-        energy_wh,
-        battery_pct,
-        COALESCE(ts, updated_at) AS last_update,
-        UNIX_TIMESTAMP(COALESCE(ts, updated_at)) AS last_update_unix
-      FROM device_state
-      WHERE device_name IS NOT NULL
-        AND device_name != ''
-        AND energy_wh IS NOT NULL
-        AND energy_wh > 0
-      ORDER BY energy_wh DESC
-      `
-    );
-
-    const stats = rows.map(row => ({
-      name: row.device_name,
-      totalEnergyWh: row.energy_wh !== null ? Number(row.energy_wh) : 0,
-      totalEnergyKWh: row.energy_wh !== null ? Number(row.energy_wh) / 1000.0 : 0,
-      avgBattery: row.battery_pct !== null ? Number(row.battery_pct) : 0,
-      sessionCount: 1, // Each device record represents one session
-      firstSeen: row.last_update_unix ? Number(row.last_update_unix) : 0,
-      lastSeen: row.last_update_unix ? Number(row.last_update_unix) : 0
-    }));
-
-    // Calculate total energy across all devices
-    const totalEnergyWh = stats.reduce((sum, stat) => sum + stat.totalEnergyWh, 0);
-    const totalEnergyKWh = totalEnergyWh / 1000.0;
-
-    // Count total days with data (based on when devices were updated)
-    // For devices with data, count distinct days
-    const [dayCountRows] = await pool.query(
-      `
-      SELECT COUNT(DISTINCT DATE(COALESCE(ts, updated_at))) AS day_count
-      FROM device_state
-      WHERE device_name IS NOT NULL
-        AND device_name != ''
-        AND energy_wh IS NOT NULL
-        AND energy_wh > 0
-        AND COALESCE(ts, updated_at) >= DATE_SUB(NOW(), INTERVAL ? DAY)
-      `,
-      [days]
-    );
-    const dayCount = dayCountRows[0]?.day_count ? Number(dayCountRows[0].day_count) : (stats.length > 0 ? 1 : 0);
+    // Return empty stats since device_state table is no longer used
+    const stats = [];
+    const totalEnergyWh = 0;
+    const totalEnergyKWh = 0;
+    const dayCount = 0;
     const avgPerDay = dayCount > 0 ? totalEnergyKWh / dayCount : (stats.length > 0 ? totalEnergyKWh : 0);
 
     console.log(`[device-stats] Returning ${stats.length} devices, totalEnergyKWh: ${totalEnergyKWh.toFixed(3)}, avgPerDay: ${avgPerDay.toFixed(3)}, dayCount: ${dayCount}`);
@@ -486,22 +317,9 @@ app.post("/api/grid-price", asyncHandler(async (req, res) => {
   }
   
   try {
-    // Calculate total energy from device_state table to estimate savings
-    // Calculate savings for all devices (device-independent)
+    // Calculate estimated savings (device_state table removed, so savings is 0)
+    // Note: Energy data is now only available from CSV history files, not from database
     let estimatedSavings = null;
-    try {
-      const [energyRows] = await pool.query(
-        "SELECT COALESCE(SUM(energy_wh), 0) as total_energy_wh FROM device_state WHERE energy_wh IS NOT NULL"
-      );
-      const totalEnergyWh = energyRows?.[0]?.total_energy_wh 
-        ? Number(energyRows[0].total_energy_wh) 
-        : 0;
-      const totalEnergyKWh = totalEnergyWh / 1000; // Convert Wh to kWh
-      estimatedSavings = (totalEnergyKWh * priceNum) / 100; // Convert cents to pesos (priceNum is in cents/kWh)
-    } catch (calcError) {
-      console.log("[Grid Price] Could not calculate estimated savings:", calcError.message);
-      // Continue without estimated savings if calculation fails
-    }
     
     // Insert new grid price record (device-independent)
     const [result] = await pool.query(
@@ -541,24 +359,20 @@ app.get("/api/grid-price", asyncHandler(async (req, res) => {
   }
 }, "API"));
 
-// History logs endpoint: returns both device_state and grid_price history
+// History logs endpoint: returns grid_price history and device_registration data
 app.get("/api/history-logs", asyncHandler(async (req, res) => {
   try {
     let limit = req.query.limit ? Number(req.query.limit) : 100;
     if (!Number.isFinite(limit) || limit <= 0) limit = 100;
     limit = Math.min(limit, 1000); // Max 1000 records
     
-    // Fetch device_state history
-    const [deviceStateRows] = await pool.query(
+    // Fetch device_registration data (for device list with last updated times)
+    const [deviceRows] = await pool.query(
       `SELECT 
-        id,
         device_name,
-        energy_wh,
-        battery_pct,
-        ts,
         updated_at
-       FROM device_state 
-       ORDER BY updated_at DESC, id DESC 
+       FROM device_registration 
+       ORDER BY updated_at DESC 
        LIMIT ?`,
       [limit]
     );
@@ -579,7 +393,8 @@ app.get("/api/history-logs", asyncHandler(async (req, res) => {
     
     return res.json({ 
       ok: true, 
-      device_states: deviceStateRows || [],
+      device_states: [], // Empty array for backward compatibility
+      devices: deviceRows || [], // New field with device registration data
       grid_prices: gridPriceRows || []
     });
   } catch (error) {

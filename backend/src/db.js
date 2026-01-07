@@ -60,70 +60,6 @@ export async function initSchema() {
     await conn.query(registrationSql);
     console.log("Database schema initialized (device_registration table ready)");
 
-    // Create device_state table (MQTT/manual-managed telemetry)
-    const stateSql = `CREATE TABLE IF NOT EXISTS device_state (
-  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  device_name VARCHAR(64) NOT NULL UNIQUE,
-  energy_wh DECIMAL(12,3) NULL,
-  battery_pct DECIMAL(5,1) NULL,
-  ts TIMESTAMP(3) NULL,
-  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-  FOREIGN KEY (device_name) REFERENCES device_registration(device_name) ON DELETE CASCADE,
-  INDEX idx_device_name (device_name),
-  INDEX idx_ts (ts)
-)`;
-    await conn.query(stateSql);
-    console.log("Database schema initialized (device_state table ready)");
-
-    // Migration: Add id column to device_state if it doesn't exist
-    try {
-      const [columns] = await conn.query(
-        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device_state'"
-      );
-      const existingColumns = columns.map(c => c.COLUMN_NAME);
-      
-      if (!existingColumns.includes('id')) {
-        console.log("[Migration] Adding id column to device_state table...");
-        
-        // Check if device_name is currently the primary key
-        const [pkInfo] = await conn.query(
-          "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device_state' AND CONSTRAINT_NAME = 'PRIMARY'"
-        );
-        const isDeviceNamePK = pkInfo.length > 0 && pkInfo[0].COLUMN_NAME === 'device_name';
-        
-        if (isDeviceNamePK) {
-          // Drop primary key constraint on device_name
-          await conn.query("ALTER TABLE device_state DROP PRIMARY KEY");
-        }
-        
-        // Add id column as first column with auto-increment
-        await conn.query("ALTER TABLE device_state ADD COLUMN id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT FIRST");
-        
-        // Set id as primary key
-        await conn.query("ALTER TABLE device_state ADD PRIMARY KEY (id)");
-        
-        // Ensure device_name has unique constraint
-        const [uniqueConstraints] = await conn.query(
-          "SELECT CONSTRAINT_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device_state' AND CONSTRAINT_TYPE = 'UNIQUE' AND CONSTRAINT_NAME LIKE '%device_name%'"
-        );
-        if (uniqueConstraints.length === 0) {
-          await conn.query("ALTER TABLE device_state ADD UNIQUE KEY uk_device_name (device_name)");
-        }
-        
-        // Add index if it doesn't exist
-        const [indexes] = await conn.query(
-          "SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device_state' AND INDEX_NAME = 'idx_device_name'"
-        );
-        if (indexes.length === 0) {
-          await conn.query("ALTER TABLE device_state ADD INDEX idx_device_name (device_name)");
-        }
-        
-        console.log("[Migration] ✅ id column added to device_state table");
-      }
-    } catch (migrationError) {
-      console.log("[Migration] Note: device_state id column migration skipped:", migrationError.message);
-    }
-
     // Migration: Migrate data from old device table to new tables
     try {
       const [tables] = await conn.query(
@@ -131,7 +67,7 @@ export async function initSchema() {
       );
       
       if (tables.length > 0) {
-        console.log("[Migration] Migrating data from device table to device_registration and device_state...");
+        console.log("[Migration] Migrating data from device table to device_registration...");
         
         // Check if migration already done
         const [regCount] = await conn.query("SELECT COUNT(*) as count FROM device_registration");
@@ -146,20 +82,6 @@ export async function initSchema() {
               updated_at = GREATEST(device_registration.updated_at, device.updated_at)
           `);
           console.log("[Migration] ✅ Migrated device names to device_registration");
-          
-          // Migrate telemetry data to device_state
-          await conn.query(`
-            INSERT INTO device_state (device_name, energy_wh, battery_pct, ts, updated_at)
-            SELECT device_name, energy_wh, battery_pct, ts, updated_at
-            FROM device
-            WHERE device_name IS NOT NULL AND device_name != ''
-            ON DUPLICATE KEY UPDATE
-              energy_wh = COALESCE(device.energy_wh, device_state.energy_wh),
-              battery_pct = COALESCE(device.battery_pct, device_state.battery_pct),
-              ts = COALESCE(device.ts, device_state.ts),
-              updated_at = GREATEST(device_state.updated_at, device.updated_at)
-          `);
-          console.log("[Migration] ✅ Migrated telemetry data to device_state");
         } else {
           console.log("[Migration] Migration already completed, skipping");
         }
@@ -282,21 +204,9 @@ export async function seedSampleDevices() {
          ON DUPLICATE KEY UPDATE updated_at = CURRENT_TIMESTAMP(3)`,
         [device.device_name]
       );
-      
-      // Insert into device_state
-      await conn.query(
-        `INSERT INTO device_state (device_name, energy_wh, battery_pct, ts) 
-         VALUES (?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE 
-           energy_wh = VALUES(energy_wh),
-           battery_pct = VALUES(battery_pct),
-           ts = VALUES(ts),
-           updated_at = CURRENT_TIMESTAMP(3)`,
-        [device.device_name, device.energy_wh, device.battery_pct, device.ts]
-      );
     }
 
-    console.log("[Seed] ✅ Successfully registered 5 sample devices with energy, battery, and timestamp data");
+    console.log("[Seed] ✅ Successfully registered 5 sample devices");
 
     // Note: Grid prices are not auto-inserted - users must click "Estimate Savings" button to save grid prices
   } catch (error) {

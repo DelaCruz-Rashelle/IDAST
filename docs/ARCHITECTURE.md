@@ -133,7 +133,7 @@ The system follows a **3-tier architecture**:
     │ ESP32 Transmitter│           │ MySQL Database      │
     │                 │            │ (Railway)           │
     │ - Sensors       │            │                     │
-    │ - Servos        │            │ - telemetry table   │
+    │ - Servos        │            │ - device_registration table   │
     │ - ESP-NOW Tx    │            │ - Auto-schema       │
     └─────────────────┘            └─────────────────────┘
 ```
@@ -426,9 +426,16 @@ User Device
 
 **Backend API (Railway):**
 - `GET /health` - Health check
-- `GET /api/latest` - Latest telemetry record
-- `GET /api/history.csv` - Historical data (CSV)
-- `GET /api/telemetry` - Query telemetry records
+- `GET /api/latest` - Latest device registration
+- `GET /api/history.csv` - Historical data (CSV) - returns empty since device_state removed
+- `GET /api/telemetry` - Query telemetry records - returns empty since device_state removed
+- `GET /api/device` - Get current device name
+- `GET /api/devices` - Get all registered devices
+- `GET /api/device-stats` - Get device statistics - returns empty stats
+- `POST /api/device-registration` - Register a device
+- `POST /api/grid-price` - Save grid price and calculate estimated savings
+- `GET /api/grid-price` - Get latest grid price
+- `GET /api/history-logs` - Get history logs (devices and grid prices)
 
 **ESP32 Web Interface (AP Mode Only):**
 - `GET /wifi-setup` - WiFi configuration page
@@ -513,34 +520,28 @@ User Device
 
 ### Database Schema (MySQL)
 
-**Table: `device`**
+**Table: `device_registration`**
 
 ```sql
-CREATE TABLE device (
+CREATE TABLE device_registration (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   device_name VARCHAR(64) NOT NULL UNIQUE,
-  energy_wh DECIMAL(12,3) NULL,
-  battery_pct DECIMAL(5,1) NULL,
-  ts TIMESTAMP(3) NULL,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-  INDEX idx_updated_at (updated_at),
-  INDEX idx_ts (ts),
   INDEX idx_device_name (device_name)
 );
 ```
 
-**Purpose:** Stores all device-related data including device names, energy values, battery percentages, and timestamps. This table replaced the telemetry table to simplify the data model.
+**Purpose:** Stores registered device names. This is the primary table for device management. Devices are automatically registered when telemetry is received via MQTT or when manually saved.
 
 **Key Design Decisions:**
-- **Device Name Length**: Extended to 64 characters to support longer device names
+- **Device Name Length**: 64 characters to support longer device names
 - **Unique Constraint**: `device_name` is unique to prevent duplicates
-- **Energy & Battery**: Stores latest energy (Wh) and battery percentage per device
-- **Timestamp**: `ts` field stores when the device data was last updated
 - **Timestamp Tracking**: `created_at` and `updated_at` for audit trail
-- **Indexing**: Multiple indexes for fast queries by timestamp and device name
+- **Indexing**: Index on `device_name` for fast lookups
+- **Auto-Registration**: Devices are automatically registered when telemetry is received
 
-**Note:** The `telemetry` table has been removed. All device-related data is now stored in the `device` table.
+**Note:** The `device_state` table has been removed. Only device registration is stored in the database. Energy and battery data come from CSV history files or MQTT telemetry (not persisted in database).
 
 **Table: `grid_price`**
 
@@ -548,21 +549,20 @@ CREATE TABLE device (
 CREATE TABLE grid_price (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   price DECIMAL(10,2) NOT NULL,
-  device_name VARCHAR(64) NULL,
   estimated_savings DECIMAL(12,2) NULL,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-  INDEX idx_updated_at (updated_at),
-  INDEX idx_device_name (device_name)
+  INDEX idx_updated_at (updated_at)
 );
 ```
 
-**Purpose:** Stores Batelec grid price values entered by users for savings calculations. Can be associated with specific devices.
+**Purpose:** Stores Batelec grid price values (in cents/kWh) entered by users for savings calculations. The price is device-independent and applies to all devices.
 
 **Key Design Decisions:**
 - **Price Validation**: Stored as `DECIMAL(10,2)` for precise currency calculations
-- **Device Association**: Optional `device_name` field to link prices to specific devices
-- **Estimated Savings**: Automatically calculated when grid price is saved (total energy kWh × price)
+- **Price Unit**: Price is stored in cents/kWh (e.g., 20 = 20 cents/kWh = ₱0.20/kWh)
+- **Estimated Savings**: Calculated as (total energy kWh × price) / 100 to convert cents to pesos
+- **Device-Independent**: Grid price applies to all devices (no device_name field)
 - **No Default Value**: Field starts empty, user must input and save
 - **Timestamp Tracking**: `created_at` and `updated_at` for audit trail
 - **Latest Value**: Queries use `ORDER BY updated_at DESC` to get most recent value
@@ -602,10 +602,10 @@ timestamp,energy_wh,battery_pct,device_name,session_min
 5. Optionally synced to MySQL (backend service)
 
 **Database Data:**
-1. Ingested by backend service (every 10s)
-2. Stored in MySQL `telemetry` table
-3. Queryable via backend API endpoints
-4. Used for advanced analytics and reporting
+1. Device registration: Automatically created when MQTT telemetry is received
+2. Stored in MySQL `device_registration` table
+3. Grid prices: Saved by user via dashboard, stored in `grid_price` table
+4. Historical data: Retrieved from CSV files (not stored in database)
 
 ---
 
