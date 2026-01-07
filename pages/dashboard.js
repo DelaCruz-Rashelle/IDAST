@@ -421,20 +421,11 @@ export default function Home() {
                       if (typeof window !== "undefined") {
                         sessionStorage.setItem("deviceNameInput", newName);
                       }
-                      // Debounce device name change
+                      // Clear any pending debounce timer (no auto-save on typing)
                       if (deviceNameDebounceRef.current) {
                         clearTimeout(deviceNameDebounceRef.current);
+                        deviceNameDebounceRef.current = null;
                       }
-                      deviceNameDebounceRef.current = setTimeout(async () => {
-                        if (newName.trim().length > 0 && newName.trim().length <= 24) {
-                          try {
-                            await mqtt.sendControl({ deviceName: newName.trim() });
-                            await saveDeviceName(newName.trim());
-                          } catch (error) {
-                            handleControlError(error, mqtt.setError, "update device name");
-                          }
-                        }
-                      }, 1000);
                     }}
                     placeholder="Enter device name (e.g., iPhone 15)"
                     maxLength={24}
@@ -454,11 +445,12 @@ export default function Home() {
                         await saveDeviceName(trimmedName);
                         // Update currentDevice state immediately so it doesn't revert to "Unknown"
                         setCurrentDevice(trimmedName);
-                        // Also send device name via MQTT to ensure it's synced
-                        await mqtt.sendControl({ deviceName: trimmedName });
+                        // Send device name and start charging command together in one message
+                        await mqtt.sendControl({ deviceName: trimmedName, startCharging: true });
+                      } else {
+                        // Send start charging command only (no device name)
+                        await mqtt.sendControl({ startCharging: true });
                       }
-                      // Send start charging command
-                      await mqtt.sendControl({ startCharging: true });
                       mqtt.setChargingStarted(true);
                       mqtt.setError("");
                     } catch (error) {
