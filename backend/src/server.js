@@ -124,7 +124,6 @@ app.get("/api/history.csv", asyncHandler(async (req, res) => {
       const [rows] = await conn.query(
         `SELECT 
           DATE(ts) as day,
-          UNIX_TIMESTAMP(DATE(ts)) as day_ts_s,
           SUM(energy_wh) as total_energy_wh,
           AVG(battery_pct) as avg_battery_pct,
           GROUP_CONCAT(DISTINCT device_name ORDER BY device_name SEPARATOR ',') as device_names,
@@ -134,7 +133,7 @@ app.get("/api/history.csv", asyncHandler(async (req, res) => {
          FROM device_state
          WHERE ts >= ? AND ts IS NOT NULL
          GROUP BY DATE(ts)
-         ORDER BY day DESC
+         ORDER BY DATE(ts) DESC
          LIMIT 1000`,
         [fromDate]
       );
@@ -147,7 +146,8 @@ app.get("/api/history.csv", asyncHandler(async (req, res) => {
       }
       
       for (const r of rows) {
-        const dayTs = Number(r.day_ts_s) || 0;
+        // Calculate Unix timestamp from day (DATE(ts))
+        const dayTs = r.day ? Math.floor(new Date(r.day).getTime() / 1000) : 0;
         const energyWh = r.total_energy_wh !== null && r.total_energy_wh !== undefined 
           ? Number(r.total_energy_wh) 
           : "";
