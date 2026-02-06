@@ -15,8 +15,10 @@ export default function Home() {
   const router = useRouter();
   const [startChargingLoading, setStartChargingLoading] = useState(false);
 
-  const REPORT_END = new Date();
-  const REPORT_START = new Date(REPORT_END.getTime() - 60 * 24 * 3600 * 1000);
+  // Get the first day of the previous month (January)
+  const today = new Date();
+  const REPORT_END = new Date(today.getFullYear(), today.getMonth(), 1); // First day of current month
+  const REPORT_START = new Date(today.getFullYear(), today.getMonth() - 1, 1); // First day of previous month
 
   // Initialize hooks in proper dependency order
   // 1. MQTT connection hook (callbacks will be set up after other hooks)
@@ -565,7 +567,7 @@ export default function Home() {
           </div>
 
           <div className="card grid-full">
-            <h3>Monthly Report — Energy History</h3>
+            <h3>Monthly Report — Energy History ({REPORT_START.toLocaleDateString("en-PH", { month: "short", year: "numeric" })} to {REPORT_END.toLocaleDateString("en-PH", { month: "short", year: "numeric" })})</h3>
             <div className="content">
               {(historyData.historyLoading || historyData.deviceStatsLoading) && (
                 <div style={{ marginBottom: "16px", color: "var(--muted)", fontSize: "13px" }}>
