@@ -72,7 +72,7 @@ export function useMqttConnection(onTelemetryProcessed, setCurrentDevice, enable
     const expected = (expectedSolarNameRef?.current ?? "").trim();
     if (expected && incomingSolarName && expected !== incomingSolarName) {
       setData(null);
-      setError(`Device not recognized. You registered "${expected}" but telemetry is from "${incomingSolarName}". Use the same name as in the unit (e.g. Solar Unit A).`);
+      setError(`Device not recognized. You registered "${expected}" but no unit with that name was found.`);
       return;
     }
 

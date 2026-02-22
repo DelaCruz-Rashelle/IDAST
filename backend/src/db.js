@@ -60,7 +60,7 @@ export async function initSchema() {
     await conn.query(registrationSql);
     console.log("Database schema initialized (device_registration table ready)");
 
-    // Create device_state table (for graph display and Monthly Report stats)
+    // Create device_state table (for Solar metrics and energy history)
     const deviceStateSql = `CREATE TABLE IF NOT EXISTS device_state (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   device_name VARCHAR(64) NOT NULL,
@@ -158,14 +158,14 @@ export async function initSchema() {
   }
 }
 
-// Seed sample device data for testing/display purposes
+// Seed sample Solar Unit data for testing/display purposes (device_name = Solar Name in this project)
 export async function seedSampleDevices() {
   const conn = await pool.getConnection();
   try {
     // Check if device_registration table already has data
     const [existingRows] = await conn.query("SELECT COUNT(*) as count FROM device_registration");
     const existingCount = existingRows[0]?.count || 0;
-    
+
     // Only seed if table is empty (or if explicitly enabled via env var)
     const forceSeed = process.env.SEED_SAMPLE_DATA === "true";
     if (existingCount > 0 && !forceSeed) {
@@ -173,55 +173,26 @@ export async function seedSampleDevices() {
       return;
     }
 
-    console.log("[Seed] Inserting 5 sample device entries...");
+    console.log("[Seed] Inserting sample Solar Unit entries...");
 
-    // Get current time and create timestamps for the last 5 days
     const now = new Date();
 
-    // Device data with both registration and state information
+    // Solar Unit data (device_name = Solar Name)
     const deviceData = [
-      {
-        device_name: "iPhone 15 Pro",
-        energy_wh: 1250.5,
-        battery_pct: 85.5,
-        ts: new Date(now.getTime() - 4 * 24 * 60 * 60 * 1000), // 4 days ago
-      },
-      {
-        device_name: "iPhone 14",
-        energy_wh: 980.3,
-        battery_pct: 78.2,
-        ts: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000), // 3 days ago
-      },
-      {
-        device_name: "Infinix Hot 50 Pro Plus",
-        energy_wh: 2100.8,
-        battery_pct: 92.0,
-        ts: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000), // 2 days ago
-      },
-      {
-        device_name: "Xiaomi Redmi 13C",
-        energy_wh: 750.2,
-        battery_pct: 72.5,
-        ts: new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000), // 1 day ago
-      },
-      {
-        device_name: "Huawei Nova 5T",
-        energy_wh: 1100.6,
-        battery_pct: 88.3,
-        ts: new Date(now.getTime() - 0.5 * 24 * 60 * 60 * 1000), // 12 hours ago
-      },
+      { device_name: "Solar Unit A", energy_wh: 1250.5, battery_pct: 85.5, ts: new Date(now.getTime() - 4 * 24 * 60 * 60 * 1000) },
+      { device_name: "Solar Unit B", energy_wh: 980.3, battery_pct: 78.2, ts: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000) },
+      { device_name: "Solar Unit C", energy_wh: 2100.8, battery_pct: 92.0, ts: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000) },
+      { device_name: "Solar Unit D", energy_wh: 750.2, battery_pct: 72.5, ts: new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000) },
+      { device_name: "Solar Unit E", energy_wh: 1100.6, battery_pct: 88.3, ts: new Date(now.getTime() - 0.5 * 24 * 60 * 60 * 1000) },
     ];
 
     for (const device of deviceData) {
-      // Insert into device_registration
       await conn.query(
         `INSERT INTO device_registration (device_name) 
          VALUES (?)
          ON DUPLICATE KEY UPDATE updated_at = CURRENT_TIMESTAMP(3)`,
         [device.device_name]
       );
-
-      // Insert into device_state (for graph display and Monthly Report stats)
       await conn.query(
         `INSERT INTO device_state (device_name, energy_wh, battery_pct, ts) 
          VALUES (?, ?, ?, ?)`,
@@ -229,7 +200,7 @@ export async function seedSampleDevices() {
       );
     }
 
-    console.log("[Seed] ✅ Successfully registered 5 sample devices with state data");
+    console.log("[Seed] ✅ Successfully registered sample Solar Units with state data");
 
     // Note: Grid prices are not auto-inserted - users must click "Estimate Savings" button to save grid prices
   } catch (error) {

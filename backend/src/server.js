@@ -154,9 +154,9 @@ app.get("/api/history.csv", asyncHandler(async (req, res) => {
         const batt = r.avg_battery_pct !== null && r.avg_battery_pct !== undefined 
           ? Number(r.avg_battery_pct).toFixed(1) 
           : "";
-        // Use first device name if multiple devices on same day, or "Multiple" if many
-        const dev = r.device_names 
-          ? (r.device_count > 3 ? "Multiple Devices" : r.device_names.split(',')[0].trim())
+        // Use first Solar Unit name if multiple on same day, or "Multiple" if many
+        const dev = r.device_names
+          ? (r.device_count > 3 ? "Multiple" : r.device_names.split(',')[0].trim())
           : "Unknown";
         const safeDev = dev.replaceAll(",", " ");
 
@@ -320,7 +320,7 @@ app.get("/api/devices", asyncHandler(async (req, res) => {
   }
 }, "API"));
 
-// Get device statistics for Monthly Report (last 60 days)
+// Get Solar Unit statistics for Solar metrics (last 60 days)
 app.get("/api/device-stats", asyncHandler(async (req, res) => {
   try {
     let days = req.query.days ? Number(req.query.days) : 60;

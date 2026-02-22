@@ -43,7 +43,7 @@ function toInt(v) {
   return n === null ? null : Math.trunc(n);
 }
 
-// MQTT message handler - processes telemetry messages from ESP32
+// MQTT message handler - processes telemetry from ESP32 (device = Solar Unit in this project)
 async function handleMqttMessage(topic, message) {
   try {
     const telemetry = JSON.parse(message.toString());
@@ -51,17 +51,16 @@ async function handleMqttMessage(topic, message) {
       handleMqttError(new Error("Invalid telemetry JSON"), topic, message);
       return;
     }
-    
-    // Register device from telemetry data
+
     await updateDeviceFromTelemetry(telemetry);
-    console.log(`✅ Device registered from telemetry: ${telemetry.device_id || "unknown"}`);
+    console.log(`✅ Solar Unit registered from telemetry: ${telemetry.device_id || "unknown"}`);
   } catch (err) {
     handleMqttError(err, topic, message);
   }
 }
 
 export async function updateDeviceFromTelemetry(t) {
-  // Register device from telemetry data (update device_registration)
+  // Register Solar Unit from telemetry (device_name = Solar Name from dashboard/firmware)
   if (t.deviceName && (t.deviceName.trim() !== "" && t.deviceName.trim().toLowerCase() !== "unknown")) {
     const deviceName = t.deviceName.trim();
     
@@ -79,8 +78,7 @@ export async function updateDeviceFromTelemetry(t) {
     }
   }
 
-  // Store telemetry data in device_state table (for graph display and Monthly Report stats)
-  // Insert new row for each telemetry reading to maintain history
+  // Store telemetry in device_state (for Solar metrics and energy history)
   if (t.deviceName && (t.deviceName.trim() !== "" && t.deviceName.trim().toLowerCase() !== "unknown")) {
     const deviceName = t.deviceName.trim();
     const energyWh = toNum(t.energyWh) ?? toNum(t.energy_wh) ?? null;
