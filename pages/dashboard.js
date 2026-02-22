@@ -506,7 +506,13 @@ export default function Home() {
                   }}
                   disabled={!(deviceName || "").trim() || registerLoading}
                 >
-                  {registerLoading ? "Registering..." : mqtt.chargingStarted ? "Registered ✓" : "Register"}
+                  {registerLoading
+                    ? "Registering..."
+                    : mqtt.error?.startsWith("Device not recognized")
+                      ? "Unit not found — enter matching name and Register"
+                      : mqtt.chargingStarted
+                        ? "Registered ✓"
+                        : "Register"}
                 </button>
 
                 {!isSolarRegistered && (
