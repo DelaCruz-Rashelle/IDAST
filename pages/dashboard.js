@@ -523,10 +523,17 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Grid Price */}
+            {/* Grid Price — only when a unit is successfully registered and connected */}
             <div className="card card-auto-fit">
               <h3>Batelec Grid Price</h3>
               <div className="content" style={{ padding: "12px 14px 16px 14px" }}>
+                {!telemetryOnline && (
+                  <div className="muted" style={{ fontSize: "13px", marginBottom: "12px" }}>
+                    {!isSolarRegistered
+                      ? "Register a Solar Unit first to set grid price."
+                      : "Unit not found — register with a matching name to use grid price."}
+                  </div>
+                )}
                 <div className="form-group">
                   <label htmlFor="gridPrice">Grid Price (cents/kWh)</label>
                   <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
@@ -534,6 +541,7 @@ export default function Home() {
                       type="number"
                       id="gridPrice"
                       value={gridPrice.gridPrice || ""}
+                      disabled={!telemetryOnline}
                       onFocus={() => {
                         gridPrice.gridPriceInputFocusedRef.current = true;
                       }}
@@ -559,12 +567,13 @@ export default function Home() {
                       step="0.01"
                       min="0"
                       max="100000"
-                      style={{ flex: "1", minWidth: "0" }}
+                      style={{ flex: "1", minWidth: "0", opacity: telemetryOnline ? 1 : 0.6 }}
                     />
                     <button
                       className="manual-btn"
                       onClick={gridPrice.handleSaveGridPrice}
                       disabled={
+                        !telemetryOnline ||
                         !gridPrice.gridPrice ||
                         isNaN(parseFloat(gridPrice.gridPrice)) ||
                         parseFloat(gridPrice.gridPrice) <= 0 ||
