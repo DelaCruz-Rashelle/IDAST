@@ -204,7 +204,7 @@ The backend **automatically creates the database schema** when it starts. You do
 
 1. On startup, the backend calls `initSchema()` from `backend/src/db.js`
 2. This function creates the following tables if they don't exist:
-   - `device_registration` - Stores registered device names
+   - `device_registration` - Stores registered device names (Solar Unit / Solar Name in this project)
    - `grid_price` - Stores grid price values and estimated savings
 3. Uses `CREATE TABLE IF NOT EXISTS`, so it's safe to run multiple times
 4. If schema creation fails, the backend exits with an error

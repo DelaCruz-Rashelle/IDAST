@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/router";
 import Head from "next/head";
 import { handleControlError } from "../utils/errorHandler.js";
@@ -17,10 +17,12 @@ const SS_SOLAR_NAME_INPUT_KEY = "solarNameInput";
 
 export default function Home() {
   const router = useRouter();
-  const [startChargingLoading, setStartChargingLoading] = useState(false);
+  const [registerLoading, setRegisterLoading] = useState(false);
 
   // Local "gate" state (so we can enable MQTT immediately when Solar Name exists)
   const [solarNameGate, setSolarNameGate] = useState(false);
+  // Ref for MQTT hook: only accept telemetry when incoming Solar Name matches this registered name
+  const expectedSolarNameRef = useRef("");
 
   // Get the first day of the previous month (January)
   const today = new Date();
@@ -30,8 +32,9 @@ export default function Home() {
   /**
    * 1) MQTT hook — GATED
    * Only connect/subscribe/process telemetry when a Solar Name is registered.
+   * Telemetry is accepted only when the unit's name (from firmware) matches the registered name.
    */
-  const mqtt = useMqttConnection(null, null, solarNameGate);
+  const mqtt = useMqttConnection(null, null, solarNameGate, expectedSolarNameRef);
 
   /**
    * 2) Device/Solar Unit management hook
@@ -119,6 +122,13 @@ export default function Home() {
   useEffect(() => {
     setSolarNameGate(!!solarNameRegistered);
   }, [solarNameRegistered]);
+
+  /**
+   * Keep expected Solar Name ref in sync so MQTT only accepts telemetry from the matching unit
+   */
+  useEffect(() => {
+    expectedSolarNameRef.current = (registeredDevices[0] ?? "").trim();
+  }, [registeredDevices]);
 
   /**
    * Handle tab/browser close: clear only transient inputs (not solar registration)
@@ -220,7 +230,7 @@ export default function Home() {
 
         {mqtt.error && (
           <div className="error-message">
-            <strong>Connection Error:</strong> {mqtt.error}
+            <strong>{mqtt.error.startsWith("Device not recognized") ? "Device not recognized" : "Connection Error"}:</strong> {mqtt.error.startsWith("Device not recognized") ? mqtt.error.replace(/^Device not recognized\.?\s*/i, "") : mqtt.error}
             {!MQTT_BROKER_URL && (
               <div style={{ marginTop: "12px", fontSize: "12px" }}>
                 Configure MQTT: Go to Vercel → Project Settings → Environment Variables → Add:
@@ -421,10 +431,10 @@ export default function Home() {
               <h3>Solar Unit Registration & Settings</h3>
               <div className="content" style={{ padding: "12px 14px 16px 14px" }}>
                 <div className="form-group">
-                  <label htmlFor="deviceName">Solar Name</label>
+                  <label htmlFor="solarName">Solar Name</label>
                   <input
                     type="text"
-                    id="deviceName"
+                    id="solarName"
                     value={deviceName}
                     onFocus={() => {
                       deviceNameInputFocusedRef.current = true;
@@ -458,11 +468,10 @@ export default function Home() {
                 <button
                   className="manual-btn full-width mt-8"
                   onClick={async () => {
-                    setStartChargingLoading(true);
+                    setRegisterLoading(true);
                     try {
-                      // Require Solar Name first (new behavior)
                       if (!deviceName || deviceName.trim().length === 0) {
-                        throw new Error("Please register a Solar Name first.");
+                        throw new Error("Please enter a Solar Name first.");
                       }
                       if (deviceName.trim().length > 24) {
                         throw new Error("Solar Name too long (max 24 characters).");
@@ -470,34 +479,35 @@ export default function Home() {
 
                       const trimmedName = deviceName.trim();
 
-                      // Save Solar Name (backend + local). Must enable telemetry immediately.
+                      // Save Solar Name (backend + local) and open gate so telemetry can connect
                       await saveDeviceName(trimmedName);
 
-                      // Sync gate instantly for this session
                       if (typeof window !== "undefined") {
                         localStorage.setItem(LS_SOLAR_NAME_KEY, trimmedName);
                         sessionStorage.setItem(SS_SOLAR_NAME_INPUT_KEY, trimmedName);
                       }
                       setSolarNameGate(true);
-
-                      // Update label immediately so it doesn't show "Unknown"
                       setCurrentDevice(trimmedName);
 
-                      // Publish start command + name (back-compat field: deviceName)
-                      await mqtt.sendControl({ deviceName: trimmedName, startCharging: true });
+                      // Best-effort: send name + start command to unit (fails if MQTT not connected yet)
+                      try {
+                        await mqtt.sendControl({ deviceName: trimmedName, startCharging: true });
+                        mqtt.setError("");
+                      } catch (controlErr) {
+                        mqtt.setError("Solar Name saved. Could not send command to unit — connect the unit to WiFi/MQTT and ensure the name matches (e.g. Solar Unit A).");
+                        return;
+                      }
 
                       mqtt.setChargingStarted(true);
-                      mqtt.setError("");
                     } catch (error) {
-                      handleControlError(error, mqtt.setError, "start charging");
+                      handleControlError(error, mqtt.setError, "register");
                     } finally {
-                      setStartChargingLoading(false);
+                      setRegisterLoading(false);
                     }
                   }}
-                  // GATE: must be registered + connected + have deviceId
-                  disabled={!isSolarRegistered || !mqtt.mqttConnected || !mqtt.deviceId || startChargingLoading}
+                  disabled={!(deviceName || "").trim() || registerLoading}
                 >
-                  {startChargingLoading ? "Starting..." : mqtt.chargingStarted ? "Charging Started ✓" : "Start Charging"}
+                  {registerLoading ? "Registering..." : mqtt.chargingStarted ? "Registered ✓" : "Register"}
                 </button>
 
                 {!isSolarRegistered && (
@@ -626,7 +636,7 @@ export default function Home() {
               {(historyData.historyLoading || historyData.deviceStatsLoading) && (
                 <div style={{ marginBottom: "16px", color: "var(--muted)", fontSize: "13px" }}>
                   {historyData.historyLoading && "Loading history data... "}
-                  {historyData.deviceStatsLoading && "Loading device statistics... "}
+                  {historyData.deviceStatsLoading && "Loading Solar Unit statistics... "}
                 </div>
               )}
 
@@ -638,7 +648,7 @@ export default function Home() {
 
               {!historyData.deviceStatsLoading && historyData.deviceStatsError && (
                 <div className="history-error" style={{ marginTop: historyData.historyError ? "8px" : "0" }}>
-                  <strong>Device Stats Error:</strong> {historyData.deviceStatsError}
+                  <strong>Solar Unit Stats Error:</strong> {historyData.deviceStatsError}
                 </div>
               )}
 
@@ -661,7 +671,7 @@ export default function Home() {
                       {charts.tooltip.energy} kWh · {charts.tooltip.battery}% batt
                     </div>
                     <div className="tooltip-text" style={{ marginTop: "2px" }}>
-                      {charts.tooltip.device}
+                      Solar Unit: {charts.tooltip.device}
                     </div>
                   </div>
                 )}

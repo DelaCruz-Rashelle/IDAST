@@ -101,7 +101,7 @@ The system uses **MQTT (Message Queuing Telemetry Transport)** for real-time dat
 - Panel temperature
 - Servo positions (tilt and pan angles)
 - Grid price
-- Device name
+- Device name (Solar Unit / Solar Name in this project)
 - WiFi information
 - And other live sensor readings
 
@@ -136,7 +136,7 @@ The system uses **MQTT (Message Queuing Telemetry Transport)** for real-time dat
   - Switch between auto and manual mode
   - Adjust tilt and pan angles
   - Update the grid price
-  - Set device name
+  - Set device name (Solar Name / Solar Unit identifier)
 
 **Where it comes from:**
 - You send commands from the dashboard

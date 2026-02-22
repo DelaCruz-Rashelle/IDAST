@@ -4,7 +4,8 @@ import { handleApiError } from "../utils/errorHandler.js";
 const RAILWAY_API_BASE_URL = process.env.NEXT_PUBLIC_RAILWAY_API_BASE_URL || "";
 
 /**
- * Custom hook for history data loading, logs, and device statistics
+ * Custom hook for history data loading, logs, and device statistics.
+ * In this project, "device" in API responses (e.g. device_stats, history logs) = the single Solar Unit.
  * @param {Function} onHistoryLoaded - Callback when history CSV is loaded (for chart drawing)
  * @returns {Object} History data state and functions
  */

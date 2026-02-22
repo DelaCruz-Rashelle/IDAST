@@ -532,7 +532,7 @@ CREATE TABLE device_registration (
 );
 ```
 
-**Purpose:** Stores registered device names. This is the primary table for device management. Devices are automatically registered when telemetry is received via MQTT or when manually saved.
+**Purpose:** Stores registered device names. In this app, "device" refers to the Solar Unit (Solar Name). This is the primary table for device management. Devices are automatically registered when telemetry is received via MQTT or when manually saved.
 
 **Key Design Decisions:**
 - **Device Name Length**: 64 characters to support longer device names

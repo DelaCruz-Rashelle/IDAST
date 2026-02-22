@@ -7,12 +7,13 @@ const MQTT_USERNAME = process.env.NEXT_PUBLIC_MQTT_USERNAME || "";
 const MQTT_PASSWORD = process.env.NEXT_PUBLIC_MQTT_PASSWORD || "";
 
 /**
- * MQTT connection hook (GATED)
+ * MQTT connection hook (gated by Solar Name registration).
  * @param {Function} onTelemetryProcessed
- * @param {Function} setCurrentDevice (will now represent currentSolarName display)
- * @param {boolean} enabled - only connect/subscribe/process when true
+ * @param {Function} setCurrentDevice - set current Solar Unit display name (currentSolarName)
+ * @param {boolean} enabled - Solar Name registered gate; only connect/subscribe/process when true
+ * @param {React.MutableRefObject<string>} [expectedSolarNameRef] - ref holding registered Solar Name; telemetry is accepted only when it matches incoming deviceName/solarName
  */
-export function useMqttConnection(onTelemetryProcessed, setCurrentDevice, enabled = true) {
+export function useMqttConnection(onTelemetryProcessed, setCurrentDevice, enabled = true, expectedSolarNameRef = null) {
   const onTelemetryProcessedRef = useRef(onTelemetryProcessed);
   const setCurrentDeviceRef = useRef(setCurrentDevice);
 
@@ -66,6 +67,14 @@ export function useMqttConnection(onTelemetryProcessed, setCurrentDevice, enable
   const processTelemetryMessage = (json) => {
     // Backward compatibility: accept deviceName as solarName
     const incomingSolarName = (json.solarName || json.deviceName || "").trim();
+
+    // Only accept telemetry when registered Solar Name matches the unit name from firmware
+    const expected = (expectedSolarNameRef?.current ?? "").trim();
+    if (expected && incomingSolarName && expected !== incomingSolarName) {
+      setData(null);
+      setError(`Device not recognized. You registered "${expected}" but telemetry is from "${incomingSolarName}". Use the same name as in the unit (e.g. Solar Unit A).`);
+      return;
+    }
 
     // Ensure data always has solarName field for UI consistency
     const normalized = {

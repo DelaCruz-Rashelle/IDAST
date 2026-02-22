@@ -3,8 +3,8 @@ import { useMemo } from "react";
 /**
  * Custom hook for calculating energy statistics from history data
  * @param {string} historyData - History CSV data
- * @param {Object} deviceStatsData - Device statistics from API
- * @param {Array} registeredDevices - Registered devices array
+ * @param {Object} deviceStatsData - Device statistics from API (Solar Unit stats)
+ * @param {Array} registeredDevices - Registered Solar Unit(s) (0 or 1 name)
  * @returns {Object} Calculated energy statistics
  */
 export function useEnergyCalculations(historyData, deviceStatsData, registeredDevices) {

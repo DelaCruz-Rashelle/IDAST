@@ -7,9 +7,10 @@ const LS_SOLAR_NAME_KEY = "solarName";
 const SS_SOLAR_NAME_INPUT_KEY = "solarNameInput";
 
 /**
- * Solar Unit management (single "device")
- * - solarName is the user-defined name for the solar prototype
- * - registeredDevices is kept as an array for backward compatibility (0 or 1 item)
+ * Solar Unit management (single "device").
+ * In this project, "device" in API/backend terms means the Solar Unit (single unit).
+ * - solarName is the user-defined name for the solar prototype.
+ * - registeredDevices is kept as an array for backward compatibility and contains 0 or 1 Solar Name.
  */
 export function useDeviceManagement(data, sendControl) {
   // Initialize from storage (prefer session for refresh continuity, then localStorage)
@@ -163,7 +164,7 @@ export function useDeviceManagement(data, sendControl) {
   };
 
   return {
-    // Backward-compatible names (dashboard currently expects these)
+    // Backward-compatible aliases: deviceName = solarName, currentDevice = current Solar Unit display name
     deviceName,
     setDeviceName,
     currentDevice,

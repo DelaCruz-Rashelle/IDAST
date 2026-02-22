@@ -239,7 +239,7 @@ app.get("/api/telemetry", asyncHandler(async (req, res) => {
   }
 }, "API"));
 
-// Device endpoints: save and retrieve device data
+// Device endpoints: save and retrieve device data (in this project, "device" = Solar Unit / Solar Name)
 app.post("/api/device", asyncHandler(async (req, res) => {
   const { device_name } = req.body;
   
@@ -297,7 +297,7 @@ app.get("/api/device", asyncHandler(async (req, res) => {
   }
 }, "API"));
 
-// Get all registered devices with their data
+// Get all registered devices (Solar Units) with their data
 app.get("/api/devices", asyncHandler(async (req, res) => {
   try {
     const [rows] = await pool.query(

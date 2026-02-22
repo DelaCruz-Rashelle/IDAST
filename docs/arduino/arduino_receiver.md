@@ -19,6 +19,9 @@
  * Update TRANSMITTER_MAC with the actual transmitter MAC before deployment.
  * WiFi credentials are configured via the web interface (AP mode).
  * MQTT credentials are configured via Preferences (set via serial or web interface).
+ *
+ * Solar Name: Set DEFAULT_SOLAR_NAME in this file (default "Solar Unit A"). This is the
+ * name sent in telemetry until the dashboard overrides it via the Register button.
  */
 
 // === WiFi / AP settings ===
@@ -109,7 +112,7 @@ struct ControlPacket {
   int16_t panSlider;
   uint8_t manualRequested;
   float gridPrice;
-  char deviceName[24];
+  char deviceName[24];  // Dashboard "Solar Name" / Solar Unit identifier
 };
 #pragma pack(pop)
 
@@ -123,8 +126,11 @@ struct ControlPacket {
   // === Grid price mirror ===
   float gridPriceRx = 12.0f;
 
-  // === Device info ===
-  String currentDevice = "Unknown";
+  // === Solar Name (change this in your .ino to set the default name sent in telemetry) ===
+  #define DEFAULT_SOLAR_NAME "Solar Unit A"   // Max 23 chars; dashboard can override via Register
+
+  // === Device info (Solar Name shown on dashboard; load from Preferences or use default) ===
+  String currentDevice = DEFAULT_SOLAR_NAME;
 
   // === Forward declarations ===
   void sendControlPacket(const ControlPacket &cmd);
@@ -1003,7 +1009,7 @@ void handle_wifi_setup() {
     Serial.printf("📥 MQTT control message received: %s\n", messageStr.c_str());
     
     // Parse JSON manually (simple parsing for gridPrice and deviceName)
-    // Expected format: {"gridPrice": 12.5, "deviceName": "iPhone 15"}
+    // Expected format: {"gridPrice": 12.5, "deviceName": "Solar Unit A"}
     ControlPacket cmd = {};
     cmd.version = 1;
     cmd.flags = 0;
@@ -1150,7 +1156,7 @@ void loop() {
       mqttClient.loop();
       publishTelemetry();
     }
-    
+
     // Periodically check ESP-NOW connection health
     static unsigned long lastConnectionCheck = 0;
     if (millis() - lastConnectionCheck > 5000) {  // Check every 5 seconds
