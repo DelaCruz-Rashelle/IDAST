@@ -19,9 +19,11 @@ export default function Home() {
   const router = useRouter();
   const [registerLoading, setRegisterLoading] = useState(false);
 
-  // Local "gate" state (so we can enable MQTT immediately when Solar Name exists)
+  // Saved Solar Name: only set on load (from storage) or when user clicks Register. Used for gate + name matching.
+  const [savedSolarName, setSavedSolarName] = useState("");
+  // Gate: open only when a name has been registered (clicked), not while typing
   const [solarNameGate, setSolarNameGate] = useState(false);
-  // Ref for MQTT hook: only accept telemetry when incoming Solar Name matches this registered name
+  // Ref for MQTT hook: only accept telemetry when incoming name matches this (saved name only)
   const expectedSolarNameRef = useRef("");
 
   // Get the first day of the previous month (January)
@@ -41,12 +43,10 @@ export default function Home() {
    * This hook should now treat the Solar as the only device.
    */
   const {
-    deviceName, // now: solarName (back-compat)
+    deviceName,
     setDeviceName,
-    currentDevice, // now: currentSolarName display (back-compat)
+    currentDevice,
     setCurrentDevice,
-    registeredDevices, // now: 0 or 1 element (single solar)
-    solarNameRegistered, // NEW (from updated hook)
     deviceNameInputFocusedRef,
     deviceNameDebounceRef,
     loadRegisteredDevices,
@@ -61,12 +61,15 @@ export default function Home() {
   /**
    * 4) History data hook
    */
-  const historyData = useHistoryData(null);
+  const historyData = useHistoryData();
+
+  // Only the saved (committed) name is used for data — not the live input
+  const registeredSolarForData = (savedSolarName || "").trim() ? [(savedSolarName || "").trim()] : [];
 
   /**
    * 5) Charts hook
    */
-  const charts = useCharts(mqtt.sensorHistory, historyData.historyData, registeredDevices, mqtt.data);
+  const charts = useCharts(mqtt.sensorHistory, mqtt.data);
 
   /**
    * 6) Energy calculations hook
@@ -74,7 +77,7 @@ export default function Home() {
   const { totalEnergyKWh, avgPerDay, deviceStats } = useEnergyCalculations(
     historyData.historyData,
     historyData.deviceStatsData,
-    registeredDevices
+    registeredSolarForData
   );
 
   /**
@@ -104,10 +107,11 @@ export default function Home() {
       return;
     }
 
-    // Restore solar name gate from storage
+    // Restore saved Solar Name from storage (only this counts as "registered" for gate + matching)
     const storedSolar =
       (sessionStorage.getItem(SS_SOLAR_NAME_INPUT_KEY) || localStorage.getItem(LS_SOLAR_NAME_KEY) || "").trim();
 
+    setSavedSolarName(storedSolar);
     setSolarNameGate(!!storedSolar);
 
     // Do NOT clear deviceName input anymore (requirement: persist solar registration)
@@ -117,18 +121,12 @@ export default function Home() {
   }, [router]);
 
   /**
-   * When hook says solar is registered, keep the MQTT gate in sync
+   * Use only the saved (committed) Solar Name for matching — not the live input.
+   * So typing in the field does not trigger "Device not recognized" or change the gate.
    */
   useEffect(() => {
-    setSolarNameGate(!!solarNameRegistered);
-  }, [solarNameRegistered]);
-
-  /**
-   * Keep expected Solar Name ref in sync so MQTT only accepts telemetry from the matching unit
-   */
-  useEffect(() => {
-    expectedSolarNameRef.current = (registeredDevices[0] ?? "").trim();
-  }, [registeredDevices]);
+    expectedSolarNameRef.current = (savedSolarName || "").trim();
+  }, [savedSolarName]);
 
   /**
    * Handle tab/browser close: clear only transient inputs (not solar registration)
@@ -176,8 +174,8 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Derived UI states
-  const isSolarRegistered = !!solarNameRegistered;
+  // Derived UI states — "registered" only when user has clicked Register (saved name), not while typing
+  const isSolarRegistered = !!(savedSolarName || "").trim();
   const telemetryOnline = isSolarRegistered && !!mqtt.data;
   const mqttAllowed = isSolarRegistered; // by requirement
   const mqttStatusLabel = !mqttAllowed ? "MQTT Disabled" : mqtt.mqttConnected ? "MQTT Connected" : "MQTT Disconnected";
@@ -486,6 +484,7 @@ export default function Home() {
                         localStorage.setItem(LS_SOLAR_NAME_KEY, trimmedName);
                         sessionStorage.setItem(SS_SOLAR_NAME_INPUT_KEY, trimmedName);
                       }
+                      setSavedSolarName(trimmedName);
                       setSolarNameGate(true);
                       setCurrentDevice(trimmedName);
 
@@ -625,12 +624,9 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Monthly Report */}
+          {/* Solar metrics & Estimated Savings (no monthly report graph) */}
           <div className="card grid-full">
-            <h3>
-              Monthly Report — Energy History ({REPORT_START.toLocaleDateString("en-PH", { month: "short", year: "numeric" })} to{" "}
-              {REPORT_END.toLocaleDateString("en-PH", { month: "short", year: "numeric" })})
-            </h3>
+            <h3>Solar metrics & Estimated Savings</h3>
 
             <div className="content">
               {(historyData.historyLoading || historyData.deviceStatsLoading) && (
@@ -651,31 +647,6 @@ export default function Home() {
                   <strong>Solar Unit Stats Error:</strong> {historyData.deviceStatsError}
                 </div>
               )}
-
-              <div className="history-chart relative">
-                <canvas ref={charts.historyChartRef} width={800} height={300}></canvas>
-
-                {charts.tooltip && (
-                  <div
-                    className="tooltip"
-                    style={{
-                      left:
-                        typeof window !== "undefined"
-                          ? Math.min(charts.tooltip.x + 10, window.innerWidth - 220)
-                          : charts.tooltip.x + 10,
-                      top: Math.max(charts.tooltip.y - 80, 10),
-                    }}
-                  >
-                    <div className="tooltip-title">{charts.tooltip.date}</div>
-                    <div className="tooltip-text">
-                      {charts.tooltip.energy} kWh · {charts.tooltip.battery}% batt
-                    </div>
-                    <div className="tooltip-text" style={{ marginTop: "2px" }}>
-                      Solar Unit: {charts.tooltip.device}
-                    </div>
-                  </div>
-                )}
-              </div>
 
               <div className="history-meta">
                 <h4>Solar Unit highlights (rolling 60 days)</h4>
@@ -832,7 +803,7 @@ export default function Home() {
                   };
 
                   // Single Solar Unit (still array for compatibility)
-                  const solarLastTimes = registeredDevices.map((solarName) => {
+                  const solarLastTimes = registeredSolarForData.map((solarName) => {
                     const device = historyData.historyLogsData.devices?.find((d) => d.device_name === solarName);
                     return {
                       name: solarName,
@@ -930,7 +901,7 @@ export default function Home() {
                           <div className="history-logs-section-header">
                             <h4>Recent Solar Units</h4>
                             <span className="history-logs-section-count">
-                              {registeredDevices.length} registered Solar Unit{registeredDevices.length !== 1 ? "s" : ""}
+                              {registeredSolarForData.length} registered Solar Unit{registeredSolarForData.length !== 1 ? "s" : ""}
                             </span>
                           </div>
 
@@ -968,7 +939,7 @@ export default function Home() {
                                       fontStyle: "italic",
                                     }}
                                   >
-                                    Showing {MAX_DEVICES} of {registeredDevices.length} Solar Units. {remainingCount} more not shown.
+                                    Showing {MAX_DEVICES} of {registeredSolarForData.length} Solar Units. {remainingCount} more not shown.
                                   </div>
                                 )}
                               </>

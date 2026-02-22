@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { handleApiError } from "../utils/errorHandler.js";
 
 const RAILWAY_API_BASE_URL = process.env.NEXT_PUBLIC_RAILWAY_API_BASE_URL || "";
@@ -6,16 +6,9 @@ const RAILWAY_API_BASE_URL = process.env.NEXT_PUBLIC_RAILWAY_API_BASE_URL || "";
 /**
  * Custom hook for history data loading, logs, and device statistics.
  * In this project, "device" in API responses (e.g. device_stats, history logs) = the single Solar Unit.
- * @param {Function} onHistoryLoaded - Callback when history CSV is loaded (for chart drawing)
  * @returns {Object} History data state and functions
  */
-export function useHistoryData(onHistoryLoaded) {
-  const onHistoryLoadedRef = useRef(onHistoryLoaded);
-  
-  // Update ref when callback changes
-  useEffect(() => {
-    onHistoryLoadedRef.current = onHistoryLoaded;
-  }, [onHistoryLoaded]);
+export function useHistoryData() {
   const [historyData, setHistoryData] = useState("");
   const [historyError, setHistoryError] = useState("");
   const [historyLoading, setHistoryLoading] = useState(false); // Loading state for history fetch
@@ -55,10 +48,6 @@ export function useHistoryData(onHistoryLoaded) {
           const text = await res.text();
           setHistoryData(text);
           setHistoryError(""); // Clear any previous errors on success
-          // Call callback for chart drawing if provided
-          if (onHistoryLoadedRef.current) {
-            onHistoryLoadedRef.current(text);
-          }
         } else {
           const errorText = await res.text();
           // Try to parse as JSON to get detailed error message
@@ -269,11 +258,6 @@ export function useHistoryData(onHistoryLoaded) {
     }
   }, []);
 
-  // Setter function to update callback
-  const setOnHistoryLoaded = useCallback((callback) => {
-    onHistoryLoadedRef.current = callback;
-  }, []);
-
   return {
     historyData,
     setHistoryData,
@@ -292,7 +276,6 @@ export function useHistoryData(onHistoryLoaded) {
     loadHistory,
     loadHistoryLogs,
     loadDeviceStats,
-    setOnHistoryLoaded
   };
 }
 
