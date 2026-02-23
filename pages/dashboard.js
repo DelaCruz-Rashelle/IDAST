@@ -467,6 +467,7 @@ export default function Home() {
                       type="text"
                       id="solarName"
                       value={deviceName}
+                      disabled={isSolarRegistered}
                       onFocus={() => {
                         deviceNameInputFocusedRef.current = true;
                       }}
@@ -477,12 +478,10 @@ export default function Home() {
                         const newName = e.target.value;
                         setDeviceName(newName);
 
-                        // When user clears the field, reset "Unit not found" so button shows "Register" again
                         if (!(newName || "").trim()) {
                           mqtt.setError("");
                         }
 
-                        // Persist input as user types (session), and allow local persist when saved
                         if (typeof window !== "undefined") {
                           sessionStorage.setItem(SS_SOLAR_NAME_INPUT_KEY, newName);
                         }
@@ -496,34 +495,6 @@ export default function Home() {
                       maxLength={24}
                       className="solar-name-input-with-clear"
                     />
-                    {(deviceName || "").trim() ? (
-                      <span
-                        className="solar-name-clear"
-                        onClick={() => {
-                          setDeviceName("");
-                          if (typeof window !== "undefined") {
-                            sessionStorage.setItem(SS_SOLAR_NAME_INPUT_KEY, "");
-                          }
-                          // Reset "Unit not found" state so the main button shows "Register" again
-                          mqtt.setError("");
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            setDeviceName("");
-                            if (typeof window !== "undefined") {
-                              sessionStorage.setItem(SS_SOLAR_NAME_INPUT_KEY, "");
-                            }
-                            mqtt.setError("");
-                          }
-                        }}
-                        role="button"
-                        tabIndex={0}
-                        aria-label="Clear Solar Name"
-                      >
-                        Clear
-                      </span>
-                    ) : null}
                   </div>
                 </div>
 
@@ -534,6 +505,22 @@ export default function Home() {
                 <button
                   className="manual-btn full-width mt-8"
                   onClick={async () => {
+                    if (isSolarRegistered) {
+                      // Unregister: clear saved name and close gate so telemetry stops; allow typing again
+                      if (typeof window !== "undefined") {
+                        localStorage.removeItem(LS_SOLAR_NAME_KEY);
+                        sessionStorage.removeItem(SS_SOLAR_NAME_INPUT_KEY);
+                      }
+                      expectedSolarNameRef.current = "";
+                      setSavedSolarName("");
+                      setSolarNameGate(false);
+                      setDeviceName("");
+                      setCurrentDevice("");
+                      mqtt.setError("");
+                      mqtt.setChargingStarted(false);
+                      return;
+                    }
+
                     setRegisterLoading(true);
                     try {
                       if (!deviceName || deviceName.trim().length === 0) {
@@ -545,18 +532,11 @@ export default function Home() {
 
                       const trimmedName = deviceName.trim();
 
-                      // Save Solar Name (backend + local) and open gate so telemetry can connect
                       await saveDeviceName(trimmedName);
-
-                      if (typeof window !== "undefined") {
-                        localStorage.setItem(LS_SOLAR_NAME_KEY, trimmedName);
-                        sessionStorage.setItem(SS_SOLAR_NAME_INPUT_KEY, trimmedName);
-                      }
                       setSavedSolarName(trimmedName);
                       setSolarNameGate(true);
                       setCurrentDevice(trimmedName);
 
-                      // Best-effort: send name + start command to unit (fails if MQTT not connected yet)
                       try {
                         await mqtt.sendControl({ deviceName: trimmedName, startCharging: true });
                         mqtt.setError("");
@@ -574,13 +554,11 @@ export default function Home() {
                   }}
                   disabled={registerLoading}
                 >
-                  {registerLoading
-                    ? "Registering..."
-                    : (deviceName || "").trim() && mqtt.error?.startsWith("Device not recognized")
-                      ? "Unit not found — enter matching name and Register"
-                      : mqtt.chargingStarted
-                        ? "Registered ✓"
-                        : "Register"}
+                  {isSolarRegistered
+                    ? "Unregister"
+                    : registerLoading
+                      ? "Registering..."
+                      : "Register"}
                 </button>
 
                 {!isSolarRegistered && (

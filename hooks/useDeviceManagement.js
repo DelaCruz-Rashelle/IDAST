@@ -75,11 +75,12 @@ export function useDeviceManagement(data, sendControl) {
         .map((n) => (n || "").trim())
         .filter(Boolean);
 
-      // Treat as single Solar Unit: prefer stored solarName, else first backend entry
+      // Sync UI only from storage. When storage is empty (e.g. after Unregister), do not
+      // repopulate from API so that Unregister persists and the user can type again.
       const stored =
         typeof window !== "undefined" ? (localStorage.getItem(LS_SOLAR_NAME_KEY) || "").trim() : "";
 
-      const chosen = (stored || names[0] || "").trim();
+      const chosen = (stored || "").trim();
       if (chosen && !solarNameInputFocusedRef.current) {
         setSolarName(chosen);
         setCurrentSolarName(chosen);
