@@ -477,6 +477,11 @@ export default function Home() {
                         const newName = e.target.value;
                         setDeviceName(newName);
 
+                        // When user clears the field, reset "Unit not found" so button shows "Register" again
+                        if (!(newName || "").trim()) {
+                          mqtt.setError("");
+                        }
+
                         // Persist input as user types (session), and allow local persist when saved
                         if (typeof window !== "undefined") {
                           sessionStorage.setItem(SS_SOLAR_NAME_INPUT_KEY, newName);
@@ -567,7 +572,7 @@ export default function Home() {
                       setRegisterLoading(false);
                     }
                   }}
-                  disabled={!(deviceName || "").trim() || registerLoading}
+                  disabled={registerLoading}
                 >
                   {registerLoading
                     ? "Registering..."
