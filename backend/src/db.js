@@ -138,6 +138,35 @@ export async function initSchema() {
       console.log("[Migration] Note: device_registration UNIQUE migration skipped:", migrationError.message);
     }
 
+    // Migration: Ensure device_state has one row per device_name (dedupe + UNIQUE)
+    try {
+      const [dupRows] = await conn.query(
+        `SELECT device_name, COUNT(*) as cnt FROM device_state GROUP BY device_name HAVING cnt > 1`
+      );
+      if (dupRows.length > 0) {
+        console.log("[Migration] Deduplicating device_state (one row per device_name, keeping latest)...");
+        await conn.query(`
+          DELETE s FROM device_state s
+          INNER JOIN device_state s2 ON s.device_name = s2.device_name AND s.id < s2.id
+        `);
+        console.log("[Migration] ✅ Removed duplicate device_state rows");
+      }
+
+      const [idxRows] = await conn.query(
+        `SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device_state'
+         AND COLUMN_NAME = 'device_name' AND NON_UNIQUE = 0
+         LIMIT 1`
+      );
+      if (idxRows.length === 0) {
+        console.log("[Migration] Adding UNIQUE index on device_state.device_name...");
+        await conn.query("ALTER TABLE device_state ADD UNIQUE INDEX unique_device_name (device_name)");
+        console.log("[Migration] ✅ device_state unique_device_name index added");
+      }
+    } catch (migrationError) {
+      console.log("[Migration] Note: device_state UNIQUE migration skipped:", migrationError.message);
+    }
+
     // Create grid_price table (device-independent)
     const gridPriceSql = `CREATE TABLE IF NOT EXISTS grid_price (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -227,7 +256,12 @@ export async function seedSampleDevices() {
       );
       await conn.query(
         `INSERT INTO device_state (device_name, energy_wh, battery_pct, ts) 
-         VALUES (?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE 
+           energy_wh = VALUES(energy_wh),
+           battery_pct = VALUES(battery_pct),
+           ts = VALUES(ts),
+           updated_at = CURRENT_TIMESTAMP(3)`,
         [device.device_name, device.energy_wh, device.battery_pct, device.ts]
       );
     }

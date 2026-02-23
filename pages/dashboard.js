@@ -576,7 +576,7 @@ export default function Home() {
                 >
                   {registerLoading
                     ? "Registering..."
-                    : mqtt.error?.startsWith("Device not recognized")
+                    : (deviceName || "").trim() && mqtt.error?.startsWith("Device not recognized")
                       ? "Unit not found — enter matching name and Register"
                       : mqtt.chargingStarted
                         ? "Registered ✓"

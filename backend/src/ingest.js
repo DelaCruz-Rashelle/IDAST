@@ -66,7 +66,7 @@ export async function updateDeviceFromTelemetry(t) {
     }
   }
 
-  // Store telemetry in device_state (for Solar metrics and energy history)
+  // Store telemetry in device_state: one row per device (upsert), not append
   if (t.deviceName && (t.deviceName.trim() !== "" && t.deviceName.trim().toLowerCase() !== "unknown")) {
     const deviceName = t.deviceName.trim();
     const energyWh = toNum(t.energyWh) ?? toNum(t.energy_wh) ?? null;
@@ -74,10 +74,14 @@ export async function updateDeviceFromTelemetry(t) {
     const ts = t.ts ? new Date(t.ts) : new Date();
 
     try {
-      // Insert new device state entry (allows multiple entries per device for history)
       await pool.execute(
         `INSERT INTO device_state (device_name, energy_wh, battery_pct, ts) 
-         VALUES (?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE 
+           energy_wh = VALUES(energy_wh),
+           battery_pct = VALUES(battery_pct),
+           ts = VALUES(ts),
+           updated_at = CURRENT_TIMESTAMP(3)`,
         [deviceName, energyWh, batteryPct, ts]
       );
     } catch (error) {
