@@ -81,6 +81,108 @@ body {
   border-color: var(--accent);
 }
 
+/* Logout confirmation modal */
+.logout-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  padding: 20px;
+}
+
+.logout-modal {
+  background: linear-gradient(180deg, #101734, #0d142b);
+  border: 1px solid var(--grid);
+  border-radius: 14px;
+  padding: 24px;
+  max-width: 360px;
+  width: 100%;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+}
+
+.logout-modal-message {
+  margin: 0 0 20px 0;
+  font-size: 15px;
+  color: var(--ink);
+  line-height: 1.45;
+}
+
+.logout-modal-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+.logout-modal-btn {
+  padding: 8px 20px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.logout-modal-no {
+  background: transparent;
+  border: 1px solid var(--grid);
+  color: var(--muted);
+}
+
+.logout-modal-no:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--ink);
+}
+
+.logout-modal-yes {
+  background: var(--accent);
+  border: none;
+  color: var(--bg);
+}
+
+.logout-modal-yes:hover {
+  filter: brightness(1.1);
+}
+
+/* Solar Name input with Clear control */
+.solar-name-input-wrap {
+  position: relative;
+  display: block;
+}
+
+.solar-name-input-with-clear {
+  padding-right: 48px;
+  width: 100%;
+}
+
+.solar-name-clear {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #8a9bb5;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+  padding: 0;
+  border: none;
+  background: none;
+}
+
+.solar-name-clear:hover {
+  color: var(--muted);
+}
+
+.solar-name-clear:focus {
+  outline: none;
+}
+
 @media (max-width: 768px) {
   .header {
     flex-direction: column;

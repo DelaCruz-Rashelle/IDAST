@@ -18,6 +18,7 @@ const SS_SOLAR_NAME_INPUT_KEY = "solarNameInput";
 export default function Home() {
   const router = useRouter();
   const [registerLoading, setRegisterLoading] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
   // Saved Solar Name: only set on load (from storage) or when user clicks Register. Used for gate + name matching.
   const [savedSolarName, setSavedSolarName] = useState("");
@@ -202,23 +203,53 @@ export default function Home() {
           <div className="header-right">
             <button
               className="logout-btn"
-              onClick={() => {
-                if (typeof window !== "undefined") {
-                  sessionStorage.removeItem("isAuthenticated");
-                  sessionStorage.removeItem("email");
-                  sessionStorage.removeItem("isPageRefresh");
-                  sessionStorage.removeItem("gridPriceInput");
-                  sessionStorage.removeItem(SS_SOLAR_NAME_INPUT_KEY);
-                  localStorage.removeItem(LS_SOLAR_NAME_KEY);
-                  router.push("/login");
-                }
-              }}
+              onClick={() => setShowLogoutConfirm(true)}
               title="Logout"
             >
               Logout
             </button>
           </div>
         </div>
+
+        {/* Logout confirmation modal */}
+        {showLogoutConfirm && (
+          <div className="logout-modal-overlay" onClick={() => setShowLogoutConfirm(false)}>
+            <div className="logout-modal" onClick={(e) => e.stopPropagation()}>
+              <p className="logout-modal-message">Are you sure you want to log out?</p>
+              <div className="logout-modal-actions">
+                <button
+                  type="button"
+                  className="logout-modal-btn logout-modal-no"
+                  onClick={() => setShowLogoutConfirm(false)}
+                >
+                  No
+                </button>
+                <button
+                  type="button"
+                  className="logout-modal-btn logout-modal-yes"
+                  onClick={() => {
+                    setShowLogoutConfirm(false);
+                    if (typeof window !== "undefined") {
+                      sessionStorage.removeItem("isAuthenticated");
+                      sessionStorage.removeItem("email");
+                      sessionStorage.removeItem("isPageRefresh");
+                      sessionStorage.removeItem("gridPriceInput");
+                      sessionStorage.removeItem(SS_SOLAR_NAME_INPUT_KEY);
+                      localStorage.removeItem(LS_SOLAR_NAME_KEY);
+                    }
+                    setDeviceName("");
+                    setSavedSolarName("");
+                    setCurrentDevice("");
+                    setSolarNameGate(false);
+                    router.push("/login");
+                  }}
+                >
+                  Yes
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Solar registration gate message */}
         {!isSolarRegistered && (
@@ -431,33 +462,61 @@ export default function Home() {
               <div className="content" style={{ padding: "12px 14px 16px 14px" }}>
                 <div className="form-group">
                   <label htmlFor="solarName">Solar Name</label>
-                  <input
-                    type="text"
-                    id="solarName"
-                    value={deviceName}
-                    onFocus={() => {
-                      deviceNameInputFocusedRef.current = true;
-                    }}
-                    onBlur={() => {
-                      deviceNameInputFocusedRef.current = false;
-                    }}
-                    onChange={(e) => {
-                      const newName = e.target.value;
-                      setDeviceName(newName);
+                  <div className="solar-name-input-wrap">
+                    <input
+                      type="text"
+                      id="solarName"
+                      value={deviceName}
+                      onFocus={() => {
+                        deviceNameInputFocusedRef.current = true;
+                      }}
+                      onBlur={() => {
+                        deviceNameInputFocusedRef.current = false;
+                      }}
+                      onChange={(e) => {
+                        const newName = e.target.value;
+                        setDeviceName(newName);
 
-                      // Persist input as user types (session), and allow local persist when saved
-                      if (typeof window !== "undefined") {
-                        sessionStorage.setItem(SS_SOLAR_NAME_INPUT_KEY, newName);
-                      }
+                        // Persist input as user types (session), and allow local persist when saved
+                        if (typeof window !== "undefined") {
+                          sessionStorage.setItem(SS_SOLAR_NAME_INPUT_KEY, newName);
+                        }
 
-                      if (deviceNameDebounceRef.current) {
-                        clearTimeout(deviceNameDebounceRef.current);
-                        deviceNameDebounceRef.current = null;
-                      }
-                    }}
-                    placeholder="Enter Solar Name (e.g., Solar Unit A)"
-                    maxLength={24}
-                  />
+                        if (deviceNameDebounceRef.current) {
+                          clearTimeout(deviceNameDebounceRef.current);
+                          deviceNameDebounceRef.current = null;
+                        }
+                      }}
+                      placeholder="Enter Solar Name (e.g., Solar Unit A)"
+                      maxLength={24}
+                      className="solar-name-input-with-clear"
+                    />
+                    {(deviceName || "").trim() ? (
+                      <span
+                        className="solar-name-clear"
+                        onClick={() => {
+                          setDeviceName("");
+                          if (typeof window !== "undefined") {
+                            sessionStorage.setItem(SS_SOLAR_NAME_INPUT_KEY, "");
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            setDeviceName("");
+                            if (typeof window !== "undefined") {
+                              sessionStorage.setItem(SS_SOLAR_NAME_INPUT_KEY, "");
+                            }
+                          }
+                        }}
+                        role="button"
+                        tabIndex={0}
+                        aria-label="Clear Solar Name"
+                      >
+                        Clear
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
 
                 <div className="mb-12" style={{ fontSize: "13px" }}>
