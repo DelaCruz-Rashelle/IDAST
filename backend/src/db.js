@@ -106,6 +106,38 @@ export async function initSchema() {
       console.log("[Migration] Note: Migration skipped (may already be complete):", migrationError.message);
     }
 
+    // Migration: Ensure device_registration has one row per device_name (dedupe + UNIQUE)
+    try {
+      // 1) Deduplicate: keep one row per device_name (smallest id), delete the rest
+      const [dupRows] = await conn.query(
+        `SELECT device_name, COUNT(*) as cnt FROM device_registration GROUP BY device_name HAVING cnt > 1`
+      );
+      if (dupRows.length > 0) {
+        console.log("[Migration] Deduplicating device_registration (one row per device_name)...");
+        await conn.query(`
+          DELETE r1 FROM device_registration r1
+          INNER JOIN device_registration r2
+          ON r1.device_name = r2.device_name AND r1.id > r2.id
+        `);
+        console.log("[Migration] ✅ Removed duplicate device_registration rows");
+      }
+
+      // 2) Add UNIQUE on device_name if not already present
+      const [idxRows] = await conn.query(
+        `SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device_registration'
+         AND COLUMN_NAME = 'device_name' AND NON_UNIQUE = 0
+         LIMIT 1`
+      );
+      if (idxRows.length === 0) {
+        console.log("[Migration] Adding UNIQUE index on device_registration.device_name...");
+        await conn.query("ALTER TABLE device_registration ADD UNIQUE INDEX unique_device_name (device_name)");
+        console.log("[Migration] ✅ unique_device_name index added");
+      }
+    } catch (migrationError) {
+      console.log("[Migration] Note: device_registration UNIQUE migration skipped:", migrationError.message);
+    }
+
     // Create grid_price table (device-independent)
     const gridPriceSql = `CREATE TABLE IF NOT EXISTS grid_price (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,

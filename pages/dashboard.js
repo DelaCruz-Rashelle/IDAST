@@ -499,6 +499,8 @@ export default function Home() {
                           if (typeof window !== "undefined") {
                             sessionStorage.setItem(SS_SOLAR_NAME_INPUT_KEY, "");
                           }
+                          // Reset "Unit not found" state so the main button shows "Register" again
+                          mqtt.setError("");
                         }}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
@@ -507,6 +509,7 @@ export default function Home() {
                             if (typeof window !== "undefined") {
                               sessionStorage.setItem(SS_SOLAR_NAME_INPUT_KEY, "");
                             }
+                            mqtt.setError("");
                           }
                         }}
                         role="button"

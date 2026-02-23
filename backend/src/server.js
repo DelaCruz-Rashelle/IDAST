@@ -256,18 +256,26 @@ app.post("/api/device", asyncHandler(async (req, res) => {
   
   try {
     // Insert or update device registration (dashboard-managed)
+    const trimmedName = device_name.trim();
     const [result] = await pool.query(
       `INSERT INTO device_registration (device_name) 
        VALUES (?)
        ON DUPLICATE KEY UPDATE updated_at = CURRENT_TIMESTAMP(3)`,
-      [device_name.trim()]
+      [trimmedName]
     );
-    
-    const deviceId = result.insertId || (result.affectedRows > 0 ? result.insertId : null);
-    return res.json({ 
-      ok: true, 
-      id: deviceId, 
-      device_name: device_name.trim()
+
+    let deviceId = result.insertId;
+    if ((!deviceId || deviceId === 0) && result.affectedRows > 0) {
+      const [rows] = await pool.query(
+        "SELECT id FROM device_registration WHERE device_name = ? LIMIT 1",
+        [trimmedName]
+      );
+      deviceId = rows?.[0]?.id ?? deviceId;
+    }
+    return res.json({
+      ok: true,
+      id: deviceId,
+      device_name: trimmedName
     });
   } catch (error) {
     handleDatabaseError(error, "device registration insert");
