@@ -26,7 +26,7 @@ export default function Home() {
   // Ref for MQTT hook: only accept telemetry when incoming name matches this (saved name only)
   const expectedSolarNameRef = useRef("");
 
-  // Get the first day of the previous month (January)
+  // Report period: first day of previous month to first day of current month
   const today = new Date();
   const REPORT_END = new Date(today.getFullYear(), today.getMonth(), 1); // First day of current month
   const REPORT_START = new Date(today.getFullYear(), today.getMonth() - 1, 1); // First day of previous month
@@ -208,7 +208,8 @@ export default function Home() {
                   sessionStorage.removeItem("email");
                   sessionStorage.removeItem("isPageRefresh");
                   sessionStorage.removeItem("gridPriceInput");
-                  // DO NOT clear solar registration on logout unless you explicitly want that
+                  sessionStorage.removeItem(SS_SOLAR_NAME_INPUT_KEY);
+                  localStorage.removeItem(LS_SOLAR_NAME_KEY);
                   router.push("/login");
                 }
               }}

@@ -1,7 +1,6 @@
 import express from "express";
-import { dbPing, initSchema, seedSampleDevices } from "./db.js";
+import { dbPing, initSchema, seedSampleDevices, pool } from "./db.js";
 import { startIngestLoop } from "./ingest.js";
-import { pool } from "./db.js";
 import { asyncHandler, createErrorResponse, handleDatabaseError } from "./errorHandler.js";
 
 const app = express();

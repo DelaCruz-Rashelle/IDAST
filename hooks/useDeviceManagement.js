@@ -49,37 +49,6 @@ export function useDeviceManagement(data, sendControl) {
     if (trimmed) localStorage.setItem(LS_SOLAR_NAME_KEY, trimmed);
   }, []);
 
-  const clearSolarNameFromStorage = useCallback(() => {
-    if (typeof window === "undefined") return;
-    sessionStorage.removeItem(SS_SOLAR_NAME_INPUT_KEY);
-    localStorage.removeItem(LS_SOLAR_NAME_KEY);
-  }, []);
-
-  // Load Solar Name from backend (optional)
-  const loadDeviceName = async () => {
-    if (!RAILWAY_API_BASE_URL) return;
-
-    try {
-      const base = RAILWAY_API_BASE_URL.endsWith("/")
-        ? RAILWAY_API_BASE_URL.slice(0, -1)
-        : RAILWAY_API_BASE_URL;
-
-      const res = await fetch(`${base}/api/device`);
-      if (!res.ok) return;
-
-      const json = await res.json();
-      const name = (json.device_name || "").trim();
-      if (name && !solarNameInputFocusedRef.current) {
-        setSolarName(name);
-        setCurrentSolarName(name);
-        persistSolarNameToStorage(name);
-        solarNameLoadedFromDbRef.current = true;
-      }
-    } catch (e) {
-      console.error("Failed to load solar name:", e);
-    }
-  };
-
   // Load registered "devices" list but treat it as single Solar Unit
   const loadRegisteredDevices = async () => {
     if (!RAILWAY_API_BASE_URL) return;
@@ -184,11 +153,7 @@ export function useDeviceManagement(data, sendControl) {
     deviceNameLoadedFromDbRef: solarNameLoadedFromDbRef,
 
     // Load/save functions (kept names for minimal changes)
-    loadDeviceName,
     loadRegisteredDevices,
     saveDeviceName,
-
-    // Optional helper (not required, but handy)
-    clearSolarNameFromStorage,
   };
 }

@@ -85,7 +85,7 @@ https://api.yourdomain.com
    ```
 2. You should see:
    ```
-   IDAST telemetry backend running
+   IDAST device data backend running
    ```
 
 ### Test 2: Test API Endpoint
@@ -157,7 +157,7 @@ Unable to connect to backend API. Please check if the server is running and acce
 
 2. **Verify Railway URL:**
    - Test the URL directly in browser
-   - Should show: `IDAST telemetry backend running`
+   - Should show: `IDAST device data backend running`
    - If you get 404 or connection error, URL is wrong
 
 3. **Check Railway Service Settings:**

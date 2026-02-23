@@ -20,18 +20,6 @@ function getMqttPassword() {
   return process.env.MQTT_PASSWORD || "";
 }
 
-function toBool01(v) {
-  if (v === true) return 1;
-  if (v === false) return 0;
-  if (typeof v === "string") {
-    const s = v.toLowerCase();
-    if (s === "true" || s === "1") return 1;
-    if (s === "false" || s === "0") return 0;
-  }
-  if (typeof v === "number") return v ? 1 : 0;
-  return null;
-}
-
 function toNum(v) {
   if (v === null || v === undefined) return null;
   const n = Number(v);

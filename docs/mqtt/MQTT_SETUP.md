@@ -59,12 +59,14 @@ NEXT_PUBLIC_MQTT_PASSWORD = your-password
 
 #### Backend Server (Railway)
 
-Go to Railway → Service → Variables, add:
+Go to Railway → Service → Variables, add (use **TLS** for secure connection):
 ```
-MQTT_BROKER_URL = mqtt://your-code.emqx.cloud:1883
+MQTT_BROKER_URL = mqtts://your-code.emqx.cloud:8883
 MQTT_USERNAME = your-username
 MQTT_PASSWORD = your-password
 ```
+
+Use `mqtts://` and port **8883** for encrypted MQTT (recommended). For non-TLS testing you can use `mqtt://` and port 1883.
 
 ## Testing the Connection
 

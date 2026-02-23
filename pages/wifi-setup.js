@@ -28,18 +28,10 @@ export default function WiFiSetup() {
     }
   }, [router]);
 
-  // Get API URL - only AP mode is needed for initial WiFi configuration
-  const getApiUrl = () => {
-    // WiFi setup only works when connected to ESP32's AP network
-    // Direct connection to AP mode IP address
-    return `http://${apIP}`;
-  };
-
   // Check WiFi status from ESP32 - tries multiple connection methods
   const checkWiFiStatus = async () => {
     setStatus("🔄 Connecting to ESP32...");
-    const isHTTPS = typeof window !== "undefined" && window.location.protocol === "https:";
-    
+
     // Build list of connection methods to try
     // WiFi setup only works when connected to ESP32's AP network
     const connectionMethods = [];
@@ -109,9 +101,7 @@ export default function WiFiSetup() {
       wifiSSID: ssid,
       wifiPassword: password || ""
     });
-    
-    const isHTTPS = typeof window !== "undefined" && window.location.protocol === "https:";
-    
+
     // Build list of connection methods to try
     // WiFi setup only works when connected to ESP32's AP network
     const connectionMethods = [];

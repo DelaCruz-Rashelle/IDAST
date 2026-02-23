@@ -1,5 +1,4 @@
 import { useState, useCallback } from "react";
-import { handleApiError } from "../utils/errorHandler.js";
 
 const RAILWAY_API_BASE_URL = process.env.NEXT_PUBLIC_RAILWAY_API_BASE_URL || "";
 
@@ -19,7 +18,6 @@ export function useHistoryData() {
   const [historyLogsData, setHistoryLogsData] = useState({ device_states: [], devices: [], grid_prices: [] });
   const [historyLogsLoading, setHistoryLogsLoading] = useState(false);
   const [historyLogsError, setHistoryLogsError] = useState("");
-  const [historyLogsTab, setHistoryLogsTab] = useState("devices"); // "devices" or "grid_price"
 
   // Load history CSV for graph display
   const loadHistory = useCallback(async () => {
@@ -271,8 +269,6 @@ export function useHistoryData() {
     historyLogsData,
     historyLogsLoading,
     historyLogsError,
-    historyLogsTab,
-    setHistoryLogsTab,
     loadHistory,
     loadHistoryLogs,
     loadDeviceStats,

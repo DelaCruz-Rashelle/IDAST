@@ -139,7 +139,7 @@ Listening on port 8080
 
 Visit your backend URL (provided by Railway) to see:
 ```
-IDAST telemetry backend running
+IDAST device data backend running
 ```
 
 ---
@@ -204,7 +204,8 @@ The backend **automatically creates the database schema** when it starts. You do
 
 1. On startup, the backend calls `initSchema()` from `backend/src/db.js`
 2. This function creates the following tables if they don't exist:
-   - `device_registration` - Stores registered device names (Solar Unit / Solar Name in this project)
+   - `device_registration` - Stores registered device names (Solar Unit / Solar Name)
+   - `device_state` - Stores telemetry rows (energy_wh, battery_pct, ts) for history and metrics
    - `grid_price` - Stores grid price values and estimated savings
 3. Uses `CREATE TABLE IF NOT EXISTS`, so it's safe to run multiple times
 4. If schema creation fails, the backend exits with an error
@@ -217,14 +218,20 @@ The backend **automatically creates the database schema** when it starts. You do
 - **Timestamps**: `created_at`, `updated_at` (TIMESTAMP(3) with millisecond precision)
 - **Index**: `idx_device_name` on `device_name` column
 
+**Table: `device_state`**
+- **Primary Key**: `id` (auto-incrementing BIGINT)
+- **Device Name**: `device_name` (VARCHAR(64))
+- **Energy**: `energy_wh` (DECIMAL(12,3)), **Battery**: `battery_pct` (DECIMAL(5,1)), **Timestamp**: `ts` (TIMESTAMP(3))
+- **Timestamps**: `created_at`, `updated_at`
+- **Indexes**: `idx_device_name`, `idx_ts`, `idx_updated_at`
+- Populated by MQTT ingest on each telemetry message; used by `/api/latest`, `/api/history.csv`, `/api/telemetry`, `/api/device-stats`, and grid price savings calculation.
+
 **Table: `grid_price`**
 - **Primary Key**: `id` (auto-incrementing BIGINT)
 - **Price**: `price` (DECIMAL(10,2)) - Grid price in cents/kWh
-- **Estimated Savings**: `estimated_savings` (DECIMAL(12,2)) - Calculated savings in pesos
+- **Estimated Savings**: `estimated_savings` (DECIMAL(12,2)) - Calculated from sum of `device_state.energy_wh`
 - **Timestamps**: `created_at`, `updated_at` (TIMESTAMP(3) with millisecond precision)
 - **Index**: `idx_updated_at` on `updated_at` column
-
-**Note:** The `device_state` table has been removed. Energy and battery data are not stored in the database - they come from CSV history files or MQTT telemetry (real-time only).
 
 ### Manual Schema (Optional)
 
@@ -267,7 +274,7 @@ Simple text response confirming the backend is running.
 
 **Response:**
 ```
-IDAST telemetry backend running
+IDAST device data backend running
 ```
 
 ---
@@ -276,22 +283,24 @@ IDAST telemetry backend running
 
 **GET** `/api/latest`
 
-Returns the most recently updated device registration.
+Returns the most recently updated row from the `device_state` table (latest telemetry: device name, energy, battery, timestamp).
 
 **Response:**
 ```json
 {
   "ok": true,
   "data": {
-    "id": 123,
-    "device_name": "iPhone 15",
+    "device_name": "Solar Unit A",
+    "energy_wh": 1250.5,
+    "battery_pct": 85.5,
+    "ts": "2025-12-16T22:30:00.000Z",
     "created_at": "2025-12-16T22:30:00.000Z",
     "updated_at": "2025-12-16T22:30:00.000Z"
   }
 }
 ```
 
-**Empty Response:**
+**Empty Response (no rows in device_state):**
 ```json
 {
   "ok": true,
@@ -305,7 +314,7 @@ Returns the most recently updated device registration.
 
 **GET** `/api/history.csv?days=60`
 
-Returns empty CSV since `device_state` table has been removed. Historical data is now only available from ESP32 CSV files.
+Returns CSV of historical data aggregated by day from the `device_state` table (populated by MQTT telemetry ingest).
 
 **Query Parameters:**
 - `days` (optional): Number of days to retrieve (default: 60, max: 365)
@@ -315,7 +324,7 @@ Returns empty CSV since `device_state` table has been removed. Historical data i
 timestamp,energy_wh,battery_pct,device_name,session_min
 ```
 
-**Note:** This endpoint returns an empty CSV with headers only. Historical energy data is not stored in the database - it comes from ESP32 CSV history files.
+Each row is one day: `timestamp` (Unix), `energy_wh` (sum), `battery_pct` (avg), `device_name`, `session_min`. Empty CSV with headers only if no data in range.
 
 ---
 
@@ -323,7 +332,7 @@ timestamp,energy_wh,battery_pct,device_name,session_min
 
 **GET** `/api/telemetry?from=2025-12-01T00:00:00Z&to=2025-12-16T23:59:59Z&limit=5000`
 
-Returns empty data since `device_state` table has been removed.
+Returns telemetry rows from the `device_state` table for the given date range.
 
 **Query Parameters:**
 - `from` (optional): ISO 8601 start date/time (default: 24 hours ago)
@@ -336,17 +345,16 @@ Returns empty data since `device_state` table has been removed.
   "ok": true,
   "from": "2025-12-01T00:00:00.000Z",
   "to": "2025-12-16T23:59:59.000Z",
-  "count": 0,
-  "data": []
-}
-```
-
-**Note:** This endpoint returns empty data. Telemetry data is not stored in the database - it's only available via MQTT in real-time.
-      "device_name": "ESP32-Solar",
-      "power_w": 45.2,
-      ...
-    },
-    ...
+  "count": 2,
+  "data": [
+    {
+      "device_name": "Solar Unit A",
+      "energy_wh": 1250.5,
+      "battery_pct": 85.5,
+      "ts": "2025-12-16T22:30:00.000Z",
+      "created_at": "2025-12-16T22:30:00.000Z",
+      "updated_at": "2025-12-16T22:30:00.000Z"
+    }
   ]
 }
 ```
@@ -365,9 +373,8 @@ The backend automatically subscribes to MQTT topics and registers devices in the
    - `solar-tracker/+/status` - Device status updates
 3. When messages are received:
    - Parses JSON telemetry data
-   - Extracts `deviceName` from telemetry
-   - Registers device in `device_registration` table (creates if doesn't exist, updates `updated_at` if exists)
-   - Note: Energy and battery data are NOT stored in database (only device registration)
+   - Registers device in `device_registration` (creates if doesn't exist, updates `updated_at` if exists)
+   - Inserts a row into `device_state` (device_name, energy_wh, battery_pct, ts) for history and metrics
 4. Errors are logged but don't stop the MQTT connection (automatic reconnection)
 
 ### Configuration
@@ -459,7 +466,7 @@ MQTT reconnect attempt in 5 seconds...
 
 **Problem:** `/api/latest` returns `null` or `/api/devices` returns empty array
 
-**Note:** `/api/telemetry` and `/api/history.csv` return empty data by design (device_state table removed)
+**Note:** If no telemetry has been received via MQTT yet, `device_state` may be empty and `/api/latest`, `/api/history.csv`, `/api/telemetry`, and `/api/device-stats` will return empty or zero data until devices publish.
 
 **Check:**
 1. Is ingestion enabled? (`INGEST_ENABLED !== "false"`)
