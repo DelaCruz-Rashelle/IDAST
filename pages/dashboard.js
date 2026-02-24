@@ -322,10 +322,16 @@ export default function Home() {
           <div className="status-card">
             <div className="label">Energy Harvested</div>
             <div className="value">
-              <span className="peso">{totalEnergyKWh.toFixed(3)} kWh</span>
+              <span className="peso">{isSolarRegistered ? `${totalEnergyKWh.toFixed(3)} kWh` : "— kWh"}</span>
             </div>
-            <div className="sub">Cumulative energy harvested by the Solar Unit</div>
-            <div className="trend">Goal: 0.150 kWh by end of month</div>
+            <div className="sub">
+              {isSolarRegistered
+                ? "Cumulative energy harvested by the Solar Unit since registration"
+                : "Register a Solar Unit to see energy harvested"}
+            </div>
+            <div className="trend">
+              {isSolarRegistered ? "Goal: 0.150 kWh by end of month" : "Goal: — kWh by end of month"}
+            </div>
           </div>
         </div>
 
