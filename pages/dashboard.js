@@ -321,7 +321,7 @@ export default function Home() {
 
           <div className="status-card">
             <div className="label">Energy Harvested</div>
-            {isSolarRegistered ? (
+            {telemetryOnline ? (
               <>
                 <div className="value">
                   <span className="peso">{totalEnergyKWh.toFixed(3)} kWh</span>
@@ -334,7 +334,11 @@ export default function Home() {
                 <div className="value">
                   <span className="peso muted">—</span>
                 </div>
-                <div className="sub">Register a Solar Unit to see energy harvested</div>
+                <div className="sub">
+                  {isSolarRegistered
+                    ? "Connect a unit matching your registered name to see energy harvested"
+                    : "Register a Solar Unit to see energy harvested"}
+                </div>
                 <div className="trend muted">—</div>
               </>
             )}

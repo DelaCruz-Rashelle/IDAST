@@ -20,15 +20,13 @@
  * WiFi credentials are configured via the web interface (AP mode).
  * MQTT credentials are configured via Preferences (set via serial or web interface).
  *
- * Solar Name: Set DEFAULT_SOLAR_NAME in this file (default "Solar Unit A"). This is the
- * name sent in telemetry until the dashboard overrides it via the Register button.
  */
 
 // === WiFi / AP settings ===
 const char* AP_SSID     = "Solar_Capstone_Admin";
 const char* AP_PASSWORD = "12345678";
 
-// === WiFi Station settings (loaded from Preferences, not hardcoded) ===
+// === WiFi Station settings (loaded from Preferences) ===
 String wifiSSID = "";
 String wifiPassword = "";
 bool wifiConfigured = false;
@@ -120,14 +118,14 @@ struct ControlPacket {
   TelemetryPacket latestTelemetry = {};
   bool hasTelemetry = false;
   unsigned long lastTelemetryMs = 0;
-  const unsigned long TELEMETRY_TIMEOUT_MS = 10000;  // 10 seconds - mark data as stale if no updates
-  const unsigned long CONNECTION_LOST_TIMEOUT_MS = 30000;  // 30 seconds - consider connection lost
+  const unsigned long TELEMETRY_TIMEOUT_MS = 10000;
+  const unsigned long CONNECTION_LOST_TIMEOUT_MS = 30000;
 
   // === Grid price mirror ===
   float gridPriceRx = 12.0f;
 
   // === Solar Name (change this in your .ino to set the default name sent in telemetry) ===
-  #define DEFAULT_SOLAR_NAME "Solar Unit A"   // Max 23 chars; dashboard can override via Register
+  #define DEFAULT_SOLAR_NAME "Solar Unit A"
 
   // === Device info (Solar Name shown on dashboard; load from Preferences or use default) ===
   String currentDevice = DEFAULT_SOLAR_NAME;
@@ -150,7 +148,6 @@ struct ControlPacket {
   }
 
   void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, int len) {
-    // Log ALL received ESP-NOW packets for debugging
     Serial.printf("📥 ESP-NOW packet received! Length: %d bytes (expected: %d)\n", 
                   len, sizeof(TelemetryPacket));
     Serial.printf("   From MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
@@ -164,9 +161,8 @@ struct ControlPacket {
       gridPriceRx = latestTelemetry.gridPrice;
       currentDevice = currentDevice.length() ? currentDevice : "Unknown";
 
-      // Debug: Log when ESP-NOW data is received (only occasionally to avoid spam)
       static unsigned long lastRecvLog = 0;
-      if (millis() - lastRecvLog > 5000) {  // Log every 5 seconds
+      if (millis() - lastRecvLog > 5000) {
         lastRecvLog = millis();
         Serial.printf("📥 ESP-NOW data received: top=%d, power=%.2fW, batt=%.1f%%\n",
                       latestTelemetry.top, latestTelemetry.powerW, latestTelemetry.batteryPct);
@@ -177,7 +173,6 @@ struct ControlPacket {
         log_history_point(latestTelemetry);
       }
     } else {
-      // Debug: Log when wrong packet size is received
       Serial.printf("⚠️ ESP-NOW packet size mismatch: expected %d, got %d\n", 
                     sizeof(TelemetryPacket), len);
       Serial.println("   This might be from a different device or corrupted packet");
@@ -186,8 +181,7 @@ struct ControlPacket {
   }
 
   void initWiFiStation() {
-    // Load WiFi credentials from Preferences
-    settings.begin("solar_rx", true); // Read-only mode
+    settings.begin("solar_rx", true);
     wifiSSID = settings.getString("wifiSSID", "");
     wifiPassword = settings.getString("wifiPassword", "");
     settings.end();
@@ -205,12 +199,9 @@ struct ControlPacket {
     Serial.printf("   SSID: %s\n", wifiSSID.c_str());
     Serial.println("   (AP remains active for reconfiguration)");
     
-    // Don't switch modes here - keep AP+STA mode so AP stays visible
-    // The AP was already started in initEspNow() and should remain active
     WiFi.disconnect();
     delay(100);
     
-    // Scan for networks first to see what's available
     Serial.println("📡 Scanning for networks...");
     int n = WiFi.scanNetworks();
     Serial.printf("   Found %d networks\n", n);
@@ -228,11 +219,10 @@ struct ControlPacket {
       Serial.println("   ⚠️ Target SSID not found in scan!");
     }
     
-    // Now try to connect
     WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
     
     int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 40) {  // 20 seconds timeout
+    while (WiFi.status() != WL_CONNECTED && attempts < 40) { 
       delay(500);
       Serial.print(".");
       attempts++;
@@ -253,26 +243,17 @@ struct ControlPacket {
       Serial.printf("   Gateway: %s\n", WiFi.gatewayIP().toString().c_str());
       Serial.printf("   Subnet:  %s\n", WiFi.subnetMask().toString().c_str());
       
-      // CRITICAL: Lock WiFi channel to channel 1 for ESP-NOW compatibility
-      // Even though we're connected to WiFi, ESP-NOW requires both devices on the same channel
-      // The transmitter is locked to channel 1, so we must match it
       esp_wifi_set_promiscuous(true);
       esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
       esp_wifi_set_promiscuous(false);
       Serial.printf("📡 WiFi channel locked to %u for ESP-NOW compatibility\n", WIFI_CHANNEL);
       
-      // Keep AP active for easy reconfiguration - don't disable it
-      // If you want to disable AP to save power, uncomment the next two lines:
-      // WiFi.mode(WIFI_STA);
-      // Serial.println("✅ AP mode disabled - device running in STA mode only");
       Serial.println("✅ WiFi connected - AP remains active for reconfiguration");
       
-      // Initialize MQTT after WiFi connection
       initMqtt();
     } else {
       Serial.printf("❌ WiFi Station connection failed! Status code: %d\n", WiFi.status());
       Serial.println("   Device will continue in AP mode only");
-      // Re-enable AP mode if STA connection fails
       WiFi.mode(WIFI_AP);
       delay(100);
       WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
@@ -294,11 +275,8 @@ void reconnectWiFi() {
     mqttClient.disconnect();
     mqttConnected = false;
   }
-  // Switch to AP+STA mode to keep AP active during reconnection
-  // This allows reconfiguration if the new credentials fail
   WiFi.mode(WIFI_AP_STA);
   delay(100);
-  // Restart AP to ensure it's active
   WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
   delay(500);
   WiFi.disconnect();
@@ -307,7 +285,6 @@ void reconnectWiFi() {
 }
 
   void initEspNow() {
-    // Check if WiFi credentials exist FIRST to determine WiFi mode
     settings.begin("solar_rx", true);
     String storedSSID = settings.getString("wifiSSID", "");
     settings.end();
@@ -315,26 +292,21 @@ void reconnectWiFi() {
     bool hasCredentials = (storedSSID.length() > 0);
     
     if (hasCredentials) {
-      // Use AP+STA mode so AP stays active while connecting to WiFi
-      // This allows reconfiguration even if WiFi connection fails
       WiFi.mode(WIFI_AP_STA);
       Serial.println("📡 Starting in AP+STA mode (WiFi credentials found)");
     } else {
-      // No credentials, use AP mode only
       WiFi.mode(WIFI_AP);
       Serial.println("📡 Starting in AP mode only (no WiFi credentials)");
     }
     
-    delay(100); // Small delay to ensure mode change completes
-    
-    // Always start AP for WiFi configuration capability
+    delay(100);
     bool apStarted = WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
     if (!apStarted) {
       Serial.println("❌ Failed to start Access Point!");
       return;
     }
     
-    delay(500); // Give AP time to initialize and get IP address
+    delay(500);
     
     Serial.printf("📡 Receiver AP MAC: %s | channel: %u\n",
                   WiFi.softAPmacAddress().c_str(),
@@ -357,19 +329,13 @@ void reconnectWiFi() {
       Serial.println("   ⚠️ AP IP still not assigned. Try: http://192.168.4.1/wifi-setup");
     }
     
-    // Lock WiFi channel to channel 1 BEFORE connecting to WiFi Station
-    // This ensures ESP-NOW works even if router is on a different channel
     esp_wifi_set_promiscuous(true);
     esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
     esp_wifi_set_promiscuous(false);
     Serial.printf("📡 WiFi channel locked to %u for ESP-NOW\n", WIFI_CHANNEL);
     
-    // Then try to connect to WiFi Station (if configured)
-    // AP will remain active in AP_STA mode, allowing reconfiguration
     initWiFiStation();
     
-    // Re-lock channel after WiFi connection (in case it changed)
-    // This is critical - WiFi connection may change the channel
     esp_wifi_set_promiscuous(true);
     esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
     esp_wifi_set_promiscuous(false);
@@ -442,57 +408,14 @@ void reconnectWiFi() {
   }
 
   void seed_placeholder_history() {
-    // NOTE: Placeholder history seeding is DISABLED by default to avoid confusion
-    // Uncomment the code below if you want demo/placeholder data for testing
-    // For production, leave this function empty to start with real data only
-    
-    /*
-    File test = LittleFS.open("/history.csv", "r");
-    bool needsSeed = true;
-    if (test) {
-      int lines = 0;
-      while (test.available()) {
-        String line = test.readStringUntil('\n');
-        line.trim();
-        if (line.length() == 0) continue;
-        lines++;
-        if (lines > 1) {
-          needsSeed = false;
-          break;
-        }
-      }
-      test.close();
-    }
-    if (!needsSeed) return;
-
-    File file = LittleFS.open("/history.csv", "a");
-    if (!file) return;
-
-    const int placeholderDays = 60;
-    const unsigned long baseTs = 1761340800UL;
-    for (int i = placeholderDays - 1; i >= 0; --i) {
-      unsigned long ts = baseTs + (unsigned long)i * 86400UL;
-      float energyWh = 4.0f + 0.18f * (placeholderDays - i) + random(-10, 11) * 0.05f;
-      float batteryPctSnapshot = constrain(72.0f + 6.0f * sinf((float)i / 7.0f), 65.0f, 96.0f);
-      String device = (i % 3 == 0) ? "Galaxy_S24" : (i % 3 == 1 ? "iPhone_15" : "Tablet_A2");
-      int sessionMinutes = 30 + (i % 5) * 10;
-      file.printf("%lu,%.3f,%.1f,%s,%d\n", ts, energyWh, batteryPctSnapshot, device.c_str(), sessionMinutes);
-    }
-    file.close();
-    Serial.println("✅ Seeded placeholder history");
-    */
-    
-    // Start with empty history - real data will be logged as telemetry arrives
     Serial.println("ℹ️ History seeding disabled - starting with empty history");
   }
 
   String getDeviceId() {
     if (deviceId.length() == 0) {
-      // Generate device ID from MAC address if not set
       String mac = WiFi.macAddress();
       mac.replace(":", "");
       deviceId = "esp32-receiver-" + mac.substring(0, 6);
-      // Save to Preferences
       settings.begin("solar_rx", false);
       settings.putString("deviceId", deviceId);
       settings.end();
@@ -501,19 +424,15 @@ void reconnectWiFi() {
   }
 
   void initMqtt() {
-    // Load MQTT settings from Preferences
     settings.begin("solar_rx", true);
     String brokerHost = settings.getString("mqttBroker", MQTT_BROKER_HOST);
     int brokerPort = settings.getInt("mqttPort", MQTT_BROKER_PORT);
     
-    // Check if using default broker (EMQX Cloud) to set default credentials
     String defaultBroker = String(MQTT_BROKER_HOST);
     if (brokerHost == defaultBroker) {
-      // Using default EMQX Cloud broker, use default credentials if not set
       mqttUsername = settings.getString("mqttUsername", "solar-tracker");
       mqttPassword = settings.getString("mqttPassword", "Admin123!");
     } else {
-      // Custom broker, no default credentials
       mqttUsername = settings.getString("mqttUsername", "");
       mqttPassword = settings.getString("mqttPassword", "");
     }
@@ -525,13 +444,11 @@ void reconnectWiFi() {
       deviceId = getDeviceId();
     }
     
-    // Enable TLS (for testing - allows self-signed certs)
-    // For production, you should use: wifiClient.setCACert(root_ca);
     wifiClient.setInsecure();
     
     mqttClient.setServer(brokerHost.c_str(), brokerPort);
-    mqttClient.setBufferSize(2048);  // Increase buffer for JSON messages
-    mqttClient.setCallback(onMqttMessage);  // Set callback for incoming messages
+    mqttClient.setBufferSize(2048);
+    mqttClient.setCallback(onMqttMessage);
     
     Serial.println("\n📡 MQTT Configuration:");
     Serial.printf("   Broker: %s:%d (TLS)\n", brokerHost.c_str(), brokerPort);
@@ -543,7 +460,7 @@ void reconnectWiFi() {
 
   void reconnectMqtt() {
     if (WiFi.status() != WL_CONNECTED) {
-      return;  // Can't connect to MQTT without WiFi
+      return;
     }
     
     if (mqttClient.connected()) {
@@ -560,7 +477,6 @@ void reconnectWiFi() {
     Serial.print("🔄 Attempting MQTT connection...");
     String clientId = "ESP32-" + deviceId;
     
-    // Always use authentication (credentials are set in initMqtt)
     bool connected = mqttClient.connect(
       clientId.c_str(), 
       mqttUsername.c_str(), 
@@ -571,12 +487,10 @@ void reconnectWiFi() {
       Serial.println(" ✅ Connected!");
       mqttConnected = true;
       
-      // Publish status message
       String statusTopic = "solar-tracker/" + deviceId + "/status";
       String statusMsg = "{\"status\":\"online\",\"timestamp\":" + String(millis()) + "}";
-      mqttClient.publish(statusTopic.c_str(), statusMsg.c_str(), true);  // Retained message
+      mqttClient.publish(statusTopic.c_str(), statusMsg.c_str(), true);
       
-      // Subscribe to control topic
       String controlTopic = "solar-tracker/" + deviceId + "/control";
       if (mqttClient.subscribe(controlTopic.c_str(), 1)) {
         Serial.printf("✅ Subscribed to: %s\n", controlTopic.c_str());
@@ -596,17 +510,14 @@ void reconnectWiFi() {
     
     unsigned long now = millis();
     
-    // Check if telemetry data is stale or missing
     if (!hasTelemetry || (lastTelemetryMs > 0 && (now - lastTelemetryMs) > TELEMETRY_TIMEOUT_MS)) {
-      // Mark as stale if we had data but it's old
       if (hasTelemetry && (now - lastTelemetryMs) > TELEMETRY_TIMEOUT_MS) {
         hasTelemetry = false;
         Serial.printf("⚠️ Telemetry data expired (last received %lu ms ago)\n", now - lastTelemetryMs);
       }
       
-      // Log connection status periodically
       static unsigned long lastNoTelemetryLog = 0;
-      if (now - lastNoTelemetryLog > 60000) {  // Every 60 seconds
+      if (now - lastNoTelemetryLog > 60000) {
         lastNoTelemetryLog = now;
         if (lastTelemetryMs == 0) {
           Serial.println("⏳ Waiting for ESP-NOW telemetry data from transmitter...");
@@ -620,18 +531,16 @@ void reconnectWiFi() {
           if (timeSinceLast > CONNECTION_LOST_TIMEOUT_MS) {
             Serial.println("❌ Connection to transmitter appears lost!");
             Serial.println("   Attempting diagnostic checks...");
-            // Publish connection lost status to MQTT
             String statusTopic = "solar-tracker/" + deviceId + "/status";
             String statusMsg = "{\"status\":\"transmitter_disconnected\",\"last_telemetry_ms\":" + 
                               String(lastTelemetryMs) + ",\"timeout_ms\":" + String(timeSinceLast) + "}";
-            mqttClient.publish(statusTopic.c_str(), statusMsg.c_str(), true);  // Retained message
+            mqttClient.publish(statusTopic.c_str(), statusMsg.c_str(), true);
           }
         }
       }
       
-      // Publish a status message indicating no data (but only occasionally to avoid spam)
       static unsigned long lastStatusPublish = 0;
-      if (now - lastStatusPublish > 30000) {  // Every 30 seconds
+      if (now - lastStatusPublish > 30000) {
         lastStatusPublish = now;
         String statusTopic = "solar-tracker/" + deviceId + "/status";
         String statusMsg = "{\"status\":\"waiting_for_transmitter\",\"timestamp\":" + String(now) + "}";
@@ -641,13 +550,11 @@ void reconnectWiFi() {
       return;
     }
     
-    // Data is fresh, proceed with normal publishing
     if (now - lastMqttPublishMs < MQTT_PUBLISH_INTERVAL_MS) {
       return;
     }
     lastMqttPublishMs = now;
     
-    // Build JSON message
     String json = "{";
     json += "\"timestamp\":" + String(millis()) + ",";
     json += "\"device_id\":\"" + deviceId + "\",";
@@ -680,23 +587,20 @@ void reconnectWiFi() {
     json += "\"mode\":\"" + String(latestTelemetry.mode) + "\"";
     json += "}";
     
-    // Publish to MQTT topic
     String topic = "solar-tracker/" + deviceId + "/telemetry";
-    bool published = mqttClient.publish(topic.c_str(), json.c_str(), false);  // QoS 1, not retained
+    bool published = mqttClient.publish(topic.c_str(), json.c_str(), false);
     
     if (published) {
-      // Debug: Log successful publish (only occasionally to avoid spam)
       static unsigned long lastPublishLog = 0;
-      if (millis() - lastPublishLog > 5000) {  // Log every 5 seconds
+      if (millis() - lastPublishLog > 5000) {
         lastPublishLog = millis();
         unsigned long age = millis() - lastTelemetryMs;
         Serial.printf("📤 Telemetry published: power=%.2fW, batt=%.1f%%, mode=%s (age: %lu ms)\n", 
                       latestTelemetry.powerW, latestTelemetry.batteryPct, latestTelemetry.mode, age);
       }
       
-      // Publish connection status when data is fresh
       static unsigned long lastStatusPublish = 0;
-      if (millis() - lastStatusPublish > 60000) {  // Every 60 seconds
+      if (millis() - lastStatusPublish > 60000) {
         lastStatusPublish = millis();
         String statusTopic = "solar-tracker/" + deviceId + "/status";
         String statusMsg = "{\"status\":\"connected\",\"timestamp\":" + String(millis()) + "}";
@@ -763,8 +667,6 @@ void reconnectWiFi() {
       }
       json += "\"deviceName\":\"" + currentDevice + "\"";
     } else {
-      // No telemetry data available or data is stale - return null values to indicate no data
-      // Frontend will display "--" for missing values
       String dataStatus = "no_data";
       if (hasTelemetry && (now - lastTelemetryMs) > TELEMETRY_TIMEOUT_MS) {
         dataStatus = "stale";
@@ -784,7 +686,7 @@ void reconnectWiFi() {
       json += "\"panTarget\":null,";
       json += "\"panAngle\":null,";
       json += "\"panSlider\":null,";
-      json += "\"minTilt\":50,";  // Keep limits as they're device config, not telemetry
+      json += "\"minTilt\":50,";
       json += "\"maxTilt\":110,";
       json += "\"minPan\":50,";
       json += "\"maxPan\":130,";
@@ -807,7 +709,7 @@ void reconnectWiFi() {
       json += "\"phones\":null,";
       json += "\"phoneMinutes\":null,";
       json += "\"pesos\":null,";
-      json += "\"gridPrice\":" + String(gridPriceRx, 2) + ",";  // Keep grid price as it's stored locally
+      json += "\"gridPrice\":" + String(gridPriceRx, 2) + ",";
       json += "\"wifiSSID\":\"" + wifiSSID + "\",";
       json += "\"wifiConfigured\":" + String(wifiConfigured ? "true" : "false") + ",";
       if (WiFi.status() == WL_CONNECTED) {
@@ -822,9 +724,6 @@ void reconnectWiFi() {
     json += "}";
     server.send(200, "application/json", json);
   }
-
-  // Removed handle_data() - no longer serving HTTP telemetry endpoint
-  // Telemetry is now published via MQTT only
 
   void handle_control() {
     ControlPacket cmd = {};
@@ -923,19 +822,16 @@ void reconnectWiFi() {
     Serial.printf("   SSID: %s\n", wifiSSID.c_str());
     Serial.println("   Password: [hidden]");
 
-    // Reconnect WiFi with new credentials
     reconnectWiFi();
 
     server.send(200, "application/json", "{\"ok\":true,\"message\":\"WiFi credentials saved. Reconnecting...\"}");
   }
 
 void handle_wifi_setup() {
-  // Serve WiFi setup page in chunks to avoid memory issues
   server.sendHeader("Connection", "close");
   server.setContentLength(CONTENT_LENGTH_UNKNOWN);
   server.send(200, "text/html", "");
   
-  // Send HTML in chunks
   server.sendContent("<!DOCTYPE html><html><head>");
   server.sendContent("<meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
   server.sendContent("<title>WiFi Setup</title>");
@@ -979,8 +875,6 @@ void handle_wifi_setup() {
   server.client().stop();
 }
 
-  // Removed handle_history() - history is now published via MQTT or stored in backend
-
   void sendControlPacket(const ControlPacket &cmd) {
     esp_err_t result = esp_now_send(TRANSMITTER_MAC, (const uint8_t*)&cmd, sizeof(ControlPacket));
     if (result != ESP_OK) {
@@ -990,7 +884,6 @@ void handle_wifi_setup() {
     }
   }
 
-  // MQTT message callback - handles incoming control commands
   void onMqttMessage(char* topic, byte* payload, unsigned int length) {
     // Null-terminate the payload
     char message[256];
@@ -1001,15 +894,12 @@ void handle_wifi_setup() {
     String topicStr = String(topic);
     String messageStr = String(message);
     
-    // Only process control topic messages
     if (!topicStr.endsWith("/control")) {
       return;
     }
     
     Serial.printf("📥 MQTT control message received: %s\n", messageStr.c_str());
     
-    // Parse JSON manually (simple parsing for gridPrice and deviceName)
-    // Expected format: {"gridPrice": 12.5, "deviceName": "Solar Unit A"}
     ControlPacket cmd = {};
     cmd.version = 1;
     cmd.flags = 0;
@@ -1055,7 +945,6 @@ void handle_wifi_setup() {
       }
     }
     
-    // Forward control packet to transmitter via ESP-NOW if any flags are set
     if (cmd.flags != 0) {
       sendControlPacket(cmd);
     } else {
@@ -1066,13 +955,15 @@ void handle_wifi_setup() {
   void loadSettings() {
     settings.begin("solar_rx", false);
     gridPriceRx = settings.getFloat("gridPrice", 12.0f);
-    // WiFi credentials are loaded separately in initWiFiStation()
     settings.end();
   }
 
   void setup() {
+    // Serial Monitor MUST be 115200 baud. If you see garbage: close monitor,
+    // set 115200, reopen, then press RESET on the ESP32.
     Serial.begin(115200);
     delay(1000);
+    Serial.println("\nBAUD_OK_115200");  // If you see this line clearly, baud is correct
     Serial.println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     Serial.println("🌞 Solar Tracker Receiver - MQTT Edition");
     Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -1084,7 +975,7 @@ void handle_wifi_setup() {
     // Minimal web server - only for WiFi configuration
     server.on("/wifi-setup", handle_wifi_setup);
     server.on("/wifi-config", HTTP_POST, handle_wifi_config);
-    server.on("/data", sendTelemetryJson);  // Endpoint for WiFi status check
+    server.on("/data", sendTelemetryJson);
     server.onNotFound([]() {
       server.send(200, "text/html", "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>Solar Tracker</title></head><body><h1>Solar Tracker Receiver</h1><p>WiFi Configuration: <a href=\"/wifi-setup\">/wifi-setup</a></p><p>Device running in MQTT mode. Telemetry published to EMQX Cloud.</p></body></html>");
     });
@@ -1107,12 +998,9 @@ void handle_wifi_setup() {
   }
 
 void loop() {
-  // Handle web server (for WiFi config) - always handle, even if WiFi not connected
   server.handleClient();
   
-  // Ensure AP is always active if WiFi is not connected
   if (WiFi.status() != WL_CONNECTED) {
-    // Check if AP is active, restart if not
     if (WiFi.getMode() != WIFI_AP && WiFi.getMode() != WIFI_AP_STA) {
       WiFi.mode(WIFI_AP);
       WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
@@ -1120,29 +1008,24 @@ void loop() {
       Serial.println("📡 AP restarted (WiFi disconnected)");
     }
     
-    // WiFi disconnected - try to reconnect
     if (wifiConfigured) {
       static unsigned long lastWiFiReconnect = 0;
-      if (millis() - lastWiFiReconnect > 30000) {  // Try every 30 seconds
+      if (millis() - lastWiFiReconnect > 30000) {
         lastWiFiReconnect = millis();
         Serial.println("🔄 WiFi disconnected, attempting reconnect...");
         initWiFiStation();
       }
     }
   } else {
-    // WiFi connected - ensure AP is still active in AP_STA mode
     if (WiFi.getMode() == WIFI_STA) {
-      // Switch back to AP_STA to keep AP active
       WiFi.mode(WIFI_AP_STA);
       WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0);
       delay(100);
       Serial.println("📡 AP reactivated (was in STA-only mode)");
     }
     
-    // CRITICAL: Re-lock channel to 1 periodically to ensure ESP-NOW works
-    // WiFi connection may cause channel drift over time
     static unsigned long lastChannelLock = 0;
-    if (millis() - lastChannelLock > 10000) {  // Lock every 10 seconds
+    if (millis() - lastChannelLock > 10000) {
       lastChannelLock = millis();
       esp_wifi_set_promiscuous(true);
       esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
@@ -1157,9 +1040,8 @@ void loop() {
       publishTelemetry();
     }
 
-    // Periodically check ESP-NOW connection health
     static unsigned long lastConnectionCheck = 0;
-    if (millis() - lastConnectionCheck > 5000) {  // Check every 5 seconds
+    if (millis() - lastConnectionCheck > 5000) {
       lastConnectionCheck = millis();
       if (hasTelemetry && lastTelemetryMs > 0) {
         unsigned long timeSinceLast = millis() - lastTelemetryMs;
